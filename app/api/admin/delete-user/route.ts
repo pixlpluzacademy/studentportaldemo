@@ -1,87 +1,47 @@
 import { NextResponse } from 'next/server'
+import { callerHasPermission, getCallerFromBearerToken } from '@/lib/auth/admin'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(request: Request) {
   try {
-    const authHeader = request.headers.get('authorization')
-    const token = authHeader?.replace('Bearer ', '')
+    const token = request.headers.get('authorization')?.replace('Bearer ', '')
+    const caller = await getCallerFromBearerToken(token)
 
-    if (!token) {
-      return NextResponse.json(
-        { error: 'Unauthorized. Please login again.' },
-        { status: 401 }
-      )
+    if (!caller) {
+      return NextResponse.json({ error: 'Unauthorized. Please login again.' }, { status: 401 })
     }
 
-    const { data: callerData, error: callerError } =
-      await supabaseAdmin.auth.getUser(token)
+    const canDelete = await callerHasPermission(caller.id, 'users.delete')
 
-    if (callerError || !callerData.user) {
-      return NextResponse.json(
-        { error: 'Unauthorized. Invalid session.' },
-        { status: 401 }
-      )
-    }
-
-    const { data: callerProfile, error: callerProfileError } =
-      await supabaseAdmin
-        .from('profiles')
-        .select('id, role')
-        .eq('id', callerData.user.id)
-        .single()
-
-    if (
-      callerProfileError ||
-      !callerProfile ||
-      !['admin', 'superadmin', 'super admin'].includes(callerProfile.role)
-    ) {
-      return NextResponse.json(
-        { error: 'Only Admin and Super Admin can delete users.' },
-        { status: 403 }
-      )
+    if (!canDelete) {
+      return NextResponse.json({ error: 'You do not have permission to delete users.' }, { status: 403 })
     }
 
     const body = await request.json()
     const profileId = String(body.profileId || '').trim()
-    const mentorId = String(body.mentorId || '').trim()
+    const studentId = String(body.studentId || body.mentorId || '').trim()
 
-    if (!profileId || !mentorId) {
-      return NextResponse.json(
-        { error: 'Profile ID and Mentor ID are required.' },
-        { status: 400 }
-      )
+    if (!profileId) {
+      return NextResponse.json({ error: 'Profile ID is required.' }, { status: 400 })
     }
 
-    if (profileId === callerData.user.id) {
-      return NextResponse.json(
-        { error: 'You cannot delete your own account.' },
-        { status: 400 }
-      )
+    if (profileId === caller.id) {
+      return NextResponse.json({ error: 'You cannot delete your own account.' }, { status: 400 })
     }
 
-    const { error: mentorDeleteError } = await supabaseAdmin
-      .from('mentors')
-      .delete()
-      .eq('id', mentorId)
-
-    if (mentorDeleteError) {
-      return NextResponse.json(
-        { error: mentorDeleteError.message },
-        { status: 400 }
-      )
+    if (studentId) {
+      await supabaseAdmin.from('students').delete().eq('id', studentId)
     }
 
-    const { error: authDeleteError } =
-      await supabaseAdmin.auth.admin.deleteUser(profileId)
+    await supabaseAdmin.from('batch_staff_assignments').delete().eq('user_id', profileId)
+    await supabaseAdmin.from('user_permission_profiles').delete().eq('user_id', profileId)
+    await supabaseAdmin.from('user_branch_assignments').delete().eq('user_id', profileId)
+
+    const { error: authDeleteError } = await supabaseAdmin.auth.admin.deleteUser(profileId)
 
     if (authDeleteError) {
-      return NextResponse.json(
-        { error: authDeleteError.message },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: authDeleteError.message }, { status: 400 })
     }
-
-    await supabaseAdmin.from('profiles').delete().eq('id', profileId)
 
     return NextResponse.json({
       success: true,
@@ -90,7 +50,7 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json(
       { error: 'Something went wrong while deleting user.' },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

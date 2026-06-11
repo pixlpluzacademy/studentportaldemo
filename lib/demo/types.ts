@@ -29,6 +29,7 @@ export type PermissionAction =
 export type ModuleId =
   | 'dashboard'
   | 'companies'
+  | 'departments'
   | 'branches'
   | 'users'
   | 'roles'

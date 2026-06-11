@@ -281,7 +281,7 @@ export function CoursePageTemplate({ filter = 'all' }: { filter?: CourseFilter }
 
           <div className="flex flex-wrap gap-3">
             <Link
-              href="/specializations"
+              href="/departments"
               className="inline-flex items-center justify-center bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
             >
               Create Department

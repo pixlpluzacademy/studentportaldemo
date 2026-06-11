@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { useDemoAuth } from '@/lib/demo/auth'
 import { demoModules, submissions, tasks, students, batches } from '@/lib/demo/seed'
 import type { ModuleId } from '@/lib/demo/types'
@@ -83,12 +84,6 @@ function getRoleKey(roleName?: string, roleId?: string): DashboardRole {
   if (value.includes('admin')) return 'admin'
 
   return 'superadmin'
-}
-
-function getBatchCount(mode?: string) {
-  if (!mode) return batches.length
-
-  return (batches as any[]).filter((batch) => String(batch.mode || '').toLowerCase() === mode).length
 }
 
 function StatCard({ card, iconFolder }: { card: SummaryCard; iconFolder: string }) {
@@ -176,38 +171,64 @@ export default function DashboardPage() {
   const roleKey = getRoleKey(role?.name, role?.id)
   const visibleModules = demoModules.filter((module) => canModule(module.id))
 
+  const { activeBranch, filterByActiveBatches, activeDemoBatchNames } = useBranchScope()
+
+  const branchStudents = useMemo(
+    () => filterByActiveBatches(students, (student) => student.batch),
+    [filterByActiveBatches],
+  )
+
+  const branchBatches = useMemo(
+    () => batches.filter((batch) => activeDemoBatchNames.includes(batch.name)),
+    [activeDemoBatchNames],
+  )
+
+  const branchSubmissions = useMemo(
+    () =>
+      filterByActiveBatches(submissions, (item) => {
+        const student = students.find((entry) => entry.name === item.student)
+        return student?.batch || ''
+      }),
+    [filterByActiveBatches],
+  )
+
+  const getBranchBatchCount = (mode?: string) => {
+    if (!mode) return branchBatches.length
+    return branchBatches.filter((batch) => String(batch.mode || '').toLowerCase() === mode).length
+  }
+
   const commonAdminCards: SummaryCard[] = [
     {
-      label: 'Total Branches',
-      value: 5,
-      helper: 'Kochi active, future branches ready',
+      label: 'Active Branch',
+      value: activeBranch?.code || activeBranch?.name || '—',
+      helper: activeBranch?.name || 'Branch selected in header',
       icon: 'workstream.svg',
       moduleId: 'branches',
     },
     {
       label: 'Total Students',
-      value: students.length,
+      value: branchStudents.length,
       helper: 'All active academic records',
       icon: 'students.svg',
       moduleId: 'students',
     },
     {
       label: 'Active Batches',
-      value: batches.length,
+      value: branchBatches.length,
       helper: 'Running online and offline batches',
       icon: 'patch.svg',
       moduleId: 'batches',
     },
     {
       label: 'Online Batches',
-      value: getBatchCount('online') || 3,
+      value: getBranchBatchCount('online') || 0,
       helper: 'Zoom integration can support attendance',
       icon: 'workstream.svg',
       moduleId: 'batches',
     },
     {
       label: 'Offline Batches',
-      value: getBatchCount('offline') || 2,
+      value: getBranchBatchCount('offline') || 0,
       helper: 'Manual attendance required',
       icon: 'attendance.svg',
       moduleId: 'attendance',
@@ -221,7 +242,7 @@ export default function DashboardPage() {
     },
     {
       label: 'Final QA Pending',
-      value: submissions.length,
+      value: branchSubmissions.length,
       helper: 'Waiting for final validation',
       icon: 'reviews.svg',
       moduleId: 'final_qa',
@@ -282,10 +303,10 @@ export default function DashboardPage() {
       ],
       chartTitle: 'System Performance Overview',
       chartData: [
-        { label: 'Students', value: students.length },
-        { label: 'Batches', value: batches.length },
+        { label: 'Students', value: branchStudents.length },
+        { label: 'Batches', value: branchBatches.length },
         { label: 'Tasks', value: tasks.length },
-        { label: 'QA Pending', value: submissions.length },
+        { label: 'QA Pending', value: branchSubmissions.length },
         { label: 'Complaints', value: 4 },
       ],
     },
@@ -324,9 +345,9 @@ export default function DashboardPage() {
       chartTitle: 'Company Admin Overview',
       chartData: [
         { label: 'Branches', value: 5 },
-        { label: 'Students', value: students.length },
-        { label: 'Online Batches', value: getBatchCount('online') || 3 },
-        { label: 'Offline Batches', value: getBatchCount('offline') || 2 },
+        { label: 'Students', value: branchStudents.length },
+        { label: 'Online Batches', value: getBranchBatchCount('online') || 0 },
+        { label: 'Offline Batches', value: getBranchBatchCount('offline') || 0 },
         { label: 'Placements', value: 6 },
       ],
     },
@@ -339,7 +360,7 @@ export default function DashboardPage() {
       cards: [
         {
           label: 'Branch Students',
-          value: students.length,
+          value: branchStudents.length,
           helper: 'Students in assigned branch',
           icon: 'students.svg',
           moduleId: 'students',
@@ -353,14 +374,14 @@ export default function DashboardPage() {
         },
         {
           label: 'Active Online Batches',
-          value: getBatchCount('online') || 3,
+          value: getBranchBatchCount('online') || 0,
           helper: 'Online classes and Zoom sessions',
           icon: 'workstream.svg',
           moduleId: 'batches',
         },
         {
           label: 'Active Offline Batches',
-          value: getBatchCount('offline') || 2,
+          value: getBranchBatchCount('offline') || 0,
           helper: 'Offline classroom batches',
           icon: 'patch.svg',
           moduleId: 'batches',
@@ -381,7 +402,7 @@ export default function DashboardPage() {
         },
         {
           label: 'Pending Submissions',
-          value: submissions.length,
+          value: branchSubmissions.length,
           helper: 'Waiting for review',
           icon: 'submissions.svg',
           moduleId: 'submissions',
@@ -444,7 +465,7 @@ export default function DashboardPage() {
         },
         {
           label: 'Pending HOD Reviews',
-          value: submissions.length,
+          value: branchSubmissions.length,
           helper: 'Submissions waiting for HOD review',
           icon: 'reviews.svg',
           moduleId: 'hod_review',
@@ -533,7 +554,7 @@ export default function DashboardPage() {
         },
         {
           label: 'Students Count',
-          value: students.length,
+          value: branchStudents.length,
           helper: 'Students in assigned batches',
           icon: 'students.svg',
           moduleId: 'students',
@@ -547,7 +568,7 @@ export default function DashboardPage() {
         },
         {
           label: 'Pending Reviews',
-          value: submissions.length,
+          value: branchSubmissions.length,
           helper: 'Submissions waiting for mentor review',
           icon: 'submissions.svg',
           moduleId: 'submissions',
@@ -609,7 +630,7 @@ export default function DashboardPage() {
       cards: [
         {
           label: 'Waiting Validation',
-          value: submissions.length,
+          value: branchSubmissions.length,
           helper: 'Submissions waiting final QA',
           icon: 'reviews.svg',
           moduleId: 'final_qa',
@@ -669,7 +690,7 @@ export default function DashboardPage() {
       ],
       chartTitle: 'Final QA Status',
       chartData: [
-        { label: 'Waiting', value: submissions.length },
+        { label: 'Waiting', value: branchSubmissions.length },
         { label: 'Approved', value: 18 },
         { label: 'Revision', value: 4 },
         { label: 'Locked', value: 15 },

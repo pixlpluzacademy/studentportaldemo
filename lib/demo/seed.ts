@@ -22,7 +22,7 @@ export const permissionActions: PermissionAction[] = [
 
 export const demoModules: DemoModule[] = [
   { id: 'dashboard', label: 'Dashboard', href: '/dashboard', description: 'Overview, KPIs, quick activity and branch health.', actions: ['view'] },
-  { id: 'companies', label: 'Companies', href: '/companies', description: 'Company level setup for future multi-company management.', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'departments', label: 'Departments', href: '/departments', description: 'Skill areas / specializations linking courses and eligible mentors.', actions: ['view', 'create', 'edit', 'delete'] },
   { id: 'branches', label: 'Branches', href: '/branches', description: 'Branch setup and branch controller allocation.', actions: ['view', 'create', 'edit', 'delete', 'assign'] },
   { id: 'users', label: 'Users', href: '/users', description: 'Create users and assign roles, company and branch scope.', actions: ['view', 'create', 'edit', 'delete', 'assign'] },
   { id: 'roles', label: 'Role Management', href: '/role-management', description: 'CRM style role builder with module and action permissions.', actions: ['view', 'create', 'edit', 'delete', 'assign'] },
@@ -100,6 +100,8 @@ export const defaultRoles: DemoRole[] = [
     createdBy: 'admin',
     enabledModules: [
       'dashboard',
+      'branches',
+      'departments',
       'users',
       'courses',
       'my-courses',
@@ -121,6 +123,8 @@ export const defaultRoles: DemoRole[] = [
     permissions: permissionsForModules(
       [
         'dashboard',
+        'branches',
+        'departments',
         'users',
         'courses',
         'my-courses',
@@ -140,6 +144,8 @@ export const defaultRoles: DemoRole[] = [
         'settings',
       ],
       {
+        branches: ['view', 'create', 'edit', 'delete', 'assign'],
+        departments: ['view', 'create', 'edit', 'delete'],
         users: ['view', 'create', 'edit', 'assign'],
         'my-courses': ['view'],
         'class-materials': ['view', 'upload', 'edit', 'delete'],

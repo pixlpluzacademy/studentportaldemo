@@ -1,46 +1,24 @@
 import { NextResponse } from 'next/server'
+import { callerHasPermission, getCallerFromBearerToken } from '@/lib/auth/admin'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(request: Request) {
   let createdUserId: string | null = null
 
   try {
-    const authHeader = request.headers.get('authorization')
-    const token = authHeader?.replace('Bearer ', '')
+    const token = request.headers.get('authorization')?.replace('Bearer ', '')
+    const caller = await getCallerFromBearerToken(token)
 
-    if (!token) {
-      return NextResponse.json(
-        { error: 'Unauthorized. Please login again.' },
-        { status: 401 }
-      )
+    if (!caller) {
+      return NextResponse.json({ error: 'Unauthorized. Please login again.' }, { status: 401 })
     }
 
-    const { data: callerData, error: callerError } =
-      await supabaseAdmin.auth.getUser(token)
+    const canCreate =
+      (await callerHasPermission(caller.id, 'mentors.create')) ||
+      (await callerHasPermission(caller.id, 'users.create'))
 
-    if (callerError || !callerData.user) {
-      return NextResponse.json(
-        { error: 'Unauthorized. Invalid session.' },
-        { status: 401 }
-      )
-    }
-
-    const { data: callerProfile, error: callerProfileError } =
-      await supabaseAdmin
-        .from('profiles')
-        .select('id, role')
-        .eq('id', callerData.user.id)
-        .single()
-
-    if (
-      callerProfileError ||
-      !callerProfile ||
-      !['admin', 'superadmin'].includes(callerProfile.role)
-    ) {
-      return NextResponse.json(
-        { error: 'Only Admin and Super Admin can create mentors.' },
-        { status: 403 }
-      )
+    if (!canCreate) {
+      return NextResponse.json({ error: 'You do not have permission to create mentors.' }, { status: 403 })
     }
 
     const formData = await request.formData()
@@ -48,59 +26,55 @@ export async function POST(request: Request) {
     const fullName = String(formData.get('fullName') || '').trim()
     const email = String(formData.get('email') || '').trim().toLowerCase()
     const password = String(formData.get('password') || '').trim()
-    const department = String(formData.get('department') || '').trim()
-    const courseId = String(formData.get('courseId') || '').trim()
+    const departmentId = String(formData.get('departmentId') || formData.get('department') || '').trim()
+    const batchId = String(formData.get('batchId') || '').trim()
+    const staffType = String(formData.get('staffType') || 'mentor').trim() as
+      | 'hod'
+      | 'mentor'
+      | 'trainer'
+      | 'final_qa'
+    const permissionProfileSlug = String(formData.get('permissionProfileSlug') || 'mentor_trainer').trim()
+    const branchId = String(formData.get('branchId') || '').trim()
     const profileImage = formData.get('profileImage') as File | null
 
-    if (!fullName || !email || !password || !courseId) {
+    if (!fullName || !email || !password) {
       return NextResponse.json(
-        { error: 'Full name, email, password, and course are required.' },
-        { status: 400 }
-      )
-    }
-
-    const { data: mentorCode, error: codeError } = await supabaseAdmin.rpc(
-      'generate_mentor_code',
-      {
-        p_course_id: courseId,
-      }
-    )
-
-    if (codeError || !mentorCode) {
-      return NextResponse.json(
-        { error: codeError?.message || 'Failed to generate mentor code.' },
-        { status: 400 }
+        { error: 'Full name, email, and password are required.' },
+        { status: 400 },
       )
     }
 
     const { data: existingProfile } = await supabaseAdmin
       .from('profiles')
-      .select('id, email')
+      .select('id')
       .eq('email', email)
       .maybeSingle()
 
     if (existingProfile) {
-      return NextResponse.json(
-        { error: 'A user with this email already exists.' },
-        { status: 409 }
-      )
+      return NextResponse.json({ error: 'A user with this email already exists.' }, { status: 409 })
     }
 
-    const { data: authData, error: authError } =
-      await supabaseAdmin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: {
-          full_name: fullName,
-          role: 'mentor',
-        },
-      })
+    const { data: permissionProfile } = await supabaseAdmin
+      .from('permission_profiles')
+      .select('id, slug')
+      .eq('slug', permissionProfileSlug)
+      .maybeSingle()
+
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        full_name: fullName,
+        parent_role_id: 'mentor',
+        permission_profile_slug: permissionProfile?.slug || 'mentor_trainer',
+      },
+    })
 
     if (authError || !authData.user) {
       return NextResponse.json(
         { error: authError?.message || 'Failed to create mentor user.' },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
@@ -122,71 +96,65 @@ export async function POST(request: Request) {
 
       if (uploadError) {
         await supabaseAdmin.auth.admin.deleteUser(userId)
-
-        return NextResponse.json(
-          { error: uploadError.message },
-          { status: 400 }
-        )
+        return NextResponse.json({ error: uploadError.message }, { status: 400 })
       }
 
-      const { data: publicUrlData } = supabaseAdmin.storage
-        .from('mentor-profiles')
-        .getPublicUrl(filePath)
-
+      const { data: publicUrlData } = supabaseAdmin.storage.from('mentor-profiles').getPublicUrl(filePath)
       profilePictureUrl = publicUrlData.publicUrl
     }
 
-    const { error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .upsert(
-        {
-          id: userId,
-          full_name: fullName,
-          email,
-          role: 'mentor',
-          avatar_url: profilePictureUrl,
-        },
-        {
-          onConflict: 'id',
-        }
-      )
+    const profileUpdate: Record<string, unknown> = {
+      full_name: fullName,
+      email,
+      parent_role_id: 'mentor',
+      avatar_url: profilePictureUrl,
+      staff_source: 'internal',
+    }
+
+    if (branchId) {
+      profileUpdate.branch_id = branchId
+    }
+
+    const { error: profileError } = await supabaseAdmin.from('profiles').update(profileUpdate).eq('id', userId)
 
     if (profileError) {
       await supabaseAdmin.auth.admin.deleteUser(userId)
-
-      return NextResponse.json(
-        { error: profileError.message },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: profileError.message }, { status: 400 })
     }
 
-    const { data: mentorData, error: mentorError } = await supabaseAdmin
-      .from('mentors')
-      .insert({
-        profile_id: userId,
-        mentor_code: mentorCode,
-        course_id: courseId,
-        department: department || null,
-        profile_picture_url: profilePictureUrl,
-        status: 'active',
+    if (permissionProfile?.id) {
+      await supabaseAdmin.from('user_permission_profiles').upsert({
+        user_id: userId,
+        profile_id: permissionProfile.id,
+        is_primary: true,
       })
-      .select('id, mentor_code')
-      .single()
+    }
 
-    if (mentorError || !mentorData) {
-      await supabaseAdmin.auth.admin.deleteUser(userId)
+    if (branchId) {
+      await supabaseAdmin.from('user_branch_assignments').upsert({
+        user_id: userId,
+        branch_id: branchId,
+      })
+    }
 
-      return NextResponse.json(
-        { error: mentorError?.message || 'Failed to create mentor row.' },
-        { status: 400 }
-      )
+    if (batchId) {
+      const { error: staffError } = await supabaseAdmin.from('batch_staff_assignments').insert({
+        batch_id: batchId,
+        user_id: userId,
+        staff_type: ['hod', 'mentor', 'trainer', 'final_qa'].includes(staffType) ? staffType : 'mentor',
+      })
+
+      if (staffError) {
+        await supabaseAdmin.auth.admin.deleteUser(userId)
+        return NextResponse.json({ error: staffError.message }, { status: 400 })
+      }
     }
 
     return NextResponse.json({
       success: true,
       message: 'Mentor created successfully.',
-      mentorId: mentorData.id,
-      mentorCode: mentorData.mentor_code,
+      profileId: userId,
+      departmentId: departmentId || null,
     })
   } catch {
     if (createdUserId) {
@@ -195,7 +163,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       { error: 'Something went wrong while creating mentor.' },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

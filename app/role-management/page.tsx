@@ -1,215 +1,316 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import Image from 'next/image'
-import { useTheme } from 'next-themes'
+import { useMemo, useRef, useState } from 'react'
 import { useDemoAuth } from '@/lib/demo/auth'
-import { demoModules, permissionActions } from '@/lib/demo/seed'
-import type { DemoRole, ModuleId, PermissionAction, PermissionKey } from '@/lib/demo/types'
+import {
+  assignUserPermissionProfile,
+  deletePermissionProfile,
+  enabledModulesFromPermissionKeys,
+  savePermissionProfile,
+  type PermissionProfileItem,
+} from '@/lib/data/permissions'
+import { useRoleManagementData } from '@/lib/data/hooks/use-role-management'
+import type { PermissionKey } from '@/lib/demo/types'
 
-const parentRoles = [
-  { id: 'admin', name: 'Company Admin', level: 2, description: 'CEO or company management access.' },
-  { id: 'branch-controller', name: 'Branch Admin', level: 3, description: 'Branch-level academic and operations control.' },
-  { id: 'mentor', name: 'Mentor', level: 4, description: 'Can be HOD, trainer, student support mentor or final QA by permissions.' },
-  { id: 'student', name: 'Student', level: 5, description: 'Student learning portal access.' },
-  { id: 'placement', name: 'Placement', level: 4, description: 'Career, placement and interview readiness access.' },
-]
-
-const protectedDefaultRoleIds = [
-  'superadmin',
-  'admin',
-  'branch-controller',
-  'mentor',
-  'hod',
-  'final-qa',
-  'student',
-  'placement',
-]
-
-const getDefaultLevelByParent = (parentRoleId?: string) => {
-  return parentRoles.find((role) => role.id === parentRoleId)?.level || 4
+type EditingProfile = {
+  id: string | null
+  slug: string
+  name: string
+  parent_role_id: string
+  status: 'active' | 'inactive'
+  is_system: boolean
+  permissionKeys: PermissionKey[]
 }
 
-const emptyRole = (createdBy = 'superadmin'): DemoRole => ({
-  id: `custom-${Date.now()}`,
-  name: '',
-  level: 4,
-  parentRoleId: 'mentor',
-  companyScope: 'c1',
-  branchScope: 'b1',
-  status: 'active',
-  createdBy,
-  enabledModules: ['dashboard'],
-  permissions: ['dashboard.view'],
-})
+function emptyEditing(parentRoleId = 'mentor'): EditingProfile {
+  return {
+    id: null,
+    slug: '',
+    name: '',
+    parent_role_id: parentRoleId,
+    status: 'active',
+    is_system: false,
+    permissionKeys: ['dashboard.view'],
+  }
+}
 
-function CustomIcon({
-  icon,
-  folder,
-  alt = '',
-  className = '',
-}: {
-  icon: string
-  folder: string
-  alt?: string
-  className?: string
-}) {
-  return (
-    <Image
-      src={`/icons/${folder}/${icon}`}
-      alt={alt}
-      width={24}
-      height={24}
-      className={`shrink-0 object-contain ${className}`}
-      onError={(event) => {
-        event.currentTarget.src = `/icons/${folder}/dashboard.svg`
-      }}
-    />
-  )
+function isSuperAdminProfile(profile: Pick<PermissionProfileItem, 'slug'>) {
+  return profile.slug === 'super_admin_full'
+}
+
+function isSuperAdminUser(demoUser: { roleId: string }) {
+  return demoUser.roleId === 'superadmin' || demoUser.roleId === 'super_admin'
+}
+
+function profileToEditing(profile: PermissionProfileItem): EditingProfile {
+  return {
+    id: profile.id,
+    slug: profile.slug,
+    name: profile.name,
+    parent_role_id: profile.parent_role_id,
+    status: profile.status,
+    is_system: profile.is_system,
+    permissionKeys: [...profile.permissions],
+  }
 }
 
 export default function RoleManagementPage() {
-  const { roles, updateRoles, users, updateUsers, user, can } = useDemoAuth()
-  const { resolvedTheme } = useTheme()
-  const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
+  const { users, can, refreshSession } = useDemoAuth()
 
-  const [editing, setEditing] = useState<DemoRole>(() => emptyRole(user?.roleId))
-  const [selectedUserId, setSelectedUserId] = useState(users[0]?.id || '')
-  const [selectedRoleId, setSelectedRoleId] = useState(roles[0]?.id || '')
+  const { profiles, profilesByParentRole, parentRoles, allParentRoles, moduleGroups, actions, loading, error, reload } =
+    useRoleManagementData()
+
+  const profileDetailsRef = useRef<HTMLDivElement>(null)
+
+  const [editing, setEditing] = useState<EditingProfile>(() => emptyEditing())
+  const [selectedUserId, setSelectedUserId] = useState('')
+  const [selectedProfileId, setSelectedProfileId] = useState('')
   const [notice, setNotice] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  const selectedModuleCount = editing.enabledModules.length
-  const selectedPermissionCount = editing.permissions.length
+  const assignableUsers = useMemo(
+    () => users.filter((demoUser) => !isSuperAdminUser(demoUser)),
+    [users],
+  )
 
-  const canManage = can('roles.create') || can('roles.edit') || can('roles.assign')
+  const assignableProfiles = useMemo(
+    () => profiles.filter((profile) => !isSuperAdminProfile(profile)),
+    [profiles],
+  )
+
+  const enabledModules = useMemo(
+    () => enabledModulesFromPermissionKeys(editing.permissionKeys),
+    [editing.permissionKeys],
+  )
+
+  const canSaveProfile = editing.id ? can('roles.edit') : can('roles.create')
+  const isLockedProfile = editing.slug === 'super_admin_full'
+  const isEditingExisting = Boolean(editing.id)
+  const canEditFields = canSaveProfile && !isLockedProfile
+
+  const getStatusButtonClass = (current: 'active' | 'inactive', target: 'active' | 'inactive') => {
+    const isSelected = current === target
+    if (target === 'active') {
+      return isSelected
+        ? 'border-[#153e90]/30 bg-[#153e90]/10 px-3 py-1.5 text-xs font-semibold text-[#153e90] dark:border-[#6ee75a]/30 dark:bg-[#6ee75a]/10 dark:text-[#6ee75a]'
+        : 'border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-40'
+    }
+    return isSelected
+      ? 'border-border bg-muted px-3 py-1.5 text-xs font-semibold text-muted-foreground'
+      : 'border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-40'
+  }
 
   const getParentRoleName = (parentRoleId?: string) => {
-    if (parentRoleId === 'superadmin') {
-      return 'Super Admin'
-    }
-
-    if (parentRoleId === 'mentor' || parentRoleId === 'hod' || parentRoleId === 'final-qa') {
-      return 'Mentor'
-    }
-
-    return parentRoles.find((role) => role.id === parentRoleId)?.name || 'Not assigned'
+    if (!parentRoleId) return 'Not assigned'
+    return parentRoles.find((role) => role.id === parentRoleId)?.name || parentRoleId
   }
 
-  const getRoleCategoryName = (role: DemoRole) => {
-    if (role.id === 'superadmin') {
-      return 'Super Admin'
-    }
+  const toggleModule = (moduleId: string) => {
+    if (!canEditFields) return
 
-    if (role.id === 'mentor' || role.id === 'hod' || role.id === 'final-qa') {
-      return 'Mentor'
-    }
+    const viewKey = `${moduleId}.view` as PermissionKey
+    const hasView = editing.permissionKeys.includes(viewKey)
 
-    if (role.parentRoleId === 'mentor' || role.parentRoleId === 'hod' || role.parentRoleId === 'final-qa') {
-      return 'Mentor'
-    }
-
-    return getParentRoleName(role.parentRoleId || role.id)
-  }
-
-  const toggleModule = (moduleId: ModuleId) => {
-    const enabled = editing.enabledModules.includes(moduleId)
-
-    if (enabled) {
+    if (hasView) {
       setEditing({
         ...editing,
-        enabledModules: editing.enabledModules.filter((id) => id !== moduleId),
-        permissions: editing.permissions.filter((permission) => !permission.startsWith(`${moduleId}.`)),
+        permissionKeys: editing.permissionKeys.filter((key) => !key.startsWith(`${moduleId}.`)),
       })
     } else {
       setEditing({
         ...editing,
-        enabledModules: [...editing.enabledModules, moduleId],
-        permissions: Array.from(new Set([...editing.permissions, `${moduleId}.view` as PermissionKey])),
+        permissionKeys: Array.from(new Set([...editing.permissionKeys, viewKey])),
       })
     }
   }
 
-  const togglePermission = (moduleId: ModuleId, action: PermissionAction) => {
-    const key = `${moduleId}.${action}` as PermissionKey
-    const exists = editing.permissions.includes(key)
-    const nextPermissions = exists ? editing.permissions.filter((permission) => permission !== key) : [...editing.permissions, key]
-    const nextModules =
-      action === 'view' && !exists && !editing.enabledModules.includes(moduleId)
-        ? [...editing.enabledModules, moduleId]
-        : editing.enabledModules
+  const togglePermission = (permissionKey: PermissionKey) => {
+    if (!canEditFields) return
+
+    const exists = editing.permissionKeys.includes(permissionKey)
+    const nextPermissions = exists
+      ? editing.permissionKeys.filter((key) => key !== permissionKey)
+      : [...editing.permissionKeys, permissionKey]
 
     setEditing({
       ...editing,
-      enabledModules: nextModules,
-      permissions: nextPermissions,
+      permissionKeys: nextPermissions,
     })
   }
 
-  const saveRole = () => {
+  const saveRole = async () => {
     if (!editing.name.trim()) {
       setNotice('Please enter role name.')
       return
     }
 
-    const exists = roles.some((role) => role.id === editing.id)
-    const next = exists ? roles.map((role) => (role.id === editing.id ? editing : role)) : [...roles, editing]
-
-    updateRoles(next)
-    setSelectedRoleId(editing.id)
-    setNotice(exists ? 'Role updated successfully in demo.' : 'Role created successfully in demo.')
-  }
-
-  const editRole = (role: DemoRole) => {
-    const normalizedParentRoleId =
-      role.id === 'mentor' || role.id === 'hod' || role.id === 'final-qa'
-        ? 'mentor'
-        : role.parentRoleId
-
-    setEditing({
-      ...role,
-      parentRoleId: normalizedParentRoleId,
-      permissions: [...role.permissions],
-      enabledModules: [...role.enabledModules],
-    })
-    setNotice(`Editing ${role.name}.`)
-  }
-
-  const duplicateRole = (role: DemoRole) => {
-    const copyParentRoleId =
-      role.id === 'mentor' || role.id === 'hod' || role.id === 'final-qa'
-        ? 'mentor'
-        : role.parentRoleId || 'mentor'
-
-    const copy = {
-      ...role,
-      id: `custom-${Date.now()}`,
-      name: `${role.name} Copy`,
-      parentRoleId: copyParentRoleId,
-      createdBy: user?.roleId || 'superadmin',
-      permissions: [...role.permissions],
-      enabledModules: [...role.enabledModules],
-    }
-
-    setEditing(copy)
-    setNotice('Role duplicated. Review and save it.')
-  }
-
-  const deleteRole = (roleId: string) => {
-    if (protectedDefaultRoleIds.includes(roleId)) {
-      setNotice('Default demo roles cannot be deleted. You can duplicate and customize them.')
+    if (!editing.parent_role_id) {
+      setNotice('Please select a parent role.')
       return
     }
 
-    updateRoles(roles.filter((role) => role.id !== roleId))
-    setNotice('Custom role deleted in demo.')
+    if (isLockedProfile) {
+      setNotice('Super Admin profile is locked.')
+      return
+    }
+
+    if (!canSaveProfile) {
+      setNotice(
+        isEditingExisting
+          ? 'You do not have roles.edit permission to update this profile.'
+          : 'You do not have roles.create permission to create a profile.',
+      )
+      return
+    }
+
+    setSaving(true)
+    setNotice('')
+
+    const wasUpdate = Boolean(editing.id)
+
+    try {
+      const result = await savePermissionProfile(
+        {
+          name: editing.name.trim(),
+          parent_role_id: editing.parent_role_id,
+          status: editing.status,
+          permissionKeys: editing.permissionKeys,
+        },
+        editing.id,
+      )
+
+      if (!result.ok) {
+        setNotice(result.error)
+        return
+      }
+
+      setEditing(profileToEditing(result.profile))
+      setSelectedProfileId(result.profile.id)
+      await reload()
+      await refreshSession()
+      setNotice(
+        wasUpdate
+          ? 'Permission profile updated in Supabase.'
+          : 'Permission profile created in Supabase.',
+      )
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const assignRole = () => {
-    updateUsers(users.map((demoUser) => (demoUser.id === selectedUserId ? { ...demoUser, roleId: selectedRoleId } : demoUser)))
-    setNotice('Role assigned to demo user. Use the top role dropdown or login again to test.')
+  const editRole = (profile: PermissionProfileItem) => {
+    setEditing(profileToEditing(profile))
+    setNotice(`Editing "${profile.name}". Update the profile name below, then click Save Profile.`)
+
+    requestAnimationFrame(() => {
+      profileDetailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
   }
 
-  const availableActions = useMemo(() => new Set(permissionActions), [])
+  const setProfileStatus = async (profile: PermissionProfileItem, status: 'active' | 'inactive') => {
+    if (profile.status === status) return
+
+    if (isSuperAdminProfile(profile)) {
+      setNotice('Super Admin profile status cannot be changed.')
+      return
+    }
+
+    if (!can('roles.edit')) {
+      setNotice('You do not have roles.edit permission to change profile status.')
+      return
+    }
+
+    setSaving(true)
+    setNotice('')
+
+    try {
+      const result = await savePermissionProfile(
+        {
+          name: profile.name,
+          parent_role_id: profile.parent_role_id,
+          status,
+          permissionKeys: profile.permissions,
+        },
+        profile.id,
+      )
+
+      if (!result.ok) {
+        setNotice(result.error)
+        return
+      }
+
+      if (editing.id === profile.id) {
+        setEditing(profileToEditing(result.profile))
+      }
+
+      await reload()
+      await refreshSession()
+      setNotice(`Profile marked as ${status === 'active' ? 'Active' : 'Inactive'}.`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteRole = async (profile: PermissionProfileItem) => {
+    if (isSuperAdminProfile(profile)) {
+      setNotice('Super Admin profile cannot be deleted.')
+      return
+    }
+
+    if (profile.is_system) {
+      setNotice('System profiles cannot be deleted.')
+      return
+    }
+
+    setSaving(true)
+    setNotice('')
+
+    try {
+      const result = await deletePermissionProfile(profile.id)
+      if (!result.ok) {
+        setNotice(result.error)
+        return
+      }
+
+      if (editing.id === profile.id) {
+        setEditing(emptyEditing(parentRoles[0]?.id || 'mentor'))
+      }
+
+      await reload()
+      await refreshSession()
+      setNotice('Permission profile deleted.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const assignRole = async () => {
+    if (!selectedUserId || !selectedProfileId) {
+      setNotice('Select a user and permission profile to assign.')
+      return
+    }
+
+    setSaving(true)
+    setNotice('')
+
+    try {
+      const result = await assignUserPermissionProfile(selectedUserId, selectedProfileId)
+      if (!result.ok) {
+        setNotice(result.error)
+        return
+      }
+
+      await refreshSession()
+      setNotice('Permission profile assigned to user.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const startNewProfile = () => {
+    setEditing(emptyEditing(parentRoles[0]?.id || 'mentor'))
+    setNotice('Creating a new custom permission profile.')
+  }
 
   if (!can('roles.view')) {
     return (
@@ -226,68 +327,52 @@ export default function RoleManagementPage() {
         <p className="text-sm font-semibold text-[#153e90] dark:text-[#6ee75a]">LMS permission builder</p>
         <h1 className="mt-2 text-3xl font-bold tracking-tight">Role Management</h1>
         <p className="mt-2 max-w-4xl text-muted-foreground">
-          Create custom permission profiles under fixed parent roles. Super Admin is not listed as a parent role because there will be only one Super Admin.
+          Manage academy-wide permission profiles from Supabase. Roles are shared across all branches — switching
+          branch in the header does not change this list. Parent roles are fixed categories; profiles define
+          module and action access.
         </p>
-      </div>
-
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        {parentRoles.map((role) => (
-          <button
-            key={role.id}
-            type="button"
-            onClick={() =>
-              setEditing({
-                ...editing,
-                parentRoleId: role.id,
-                level: role.level,
-              })
-            }
-            className={
-              editing.parentRoleId === role.id
-                ? 'border border-[#153e90] bg-card p-4 text-left dark:border-white'
-                : 'border border-border bg-card p-4 text-left'
-            }
-          >
-            <div className="text-sm font-bold">{role.name}</div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{role.description}</p>
-          </button>
-        ))}
+        <p className="mt-2 text-xs text-muted-foreground">
+          Scope:{' '}
+          <span className="font-semibold text-foreground">All branches (not branch-filtered)</span>
+          {' · '}
+          Data source: <span className="font-semibold text-foreground">Supabase (live)</span>
+        </p>
+        {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
         <div className="border border-border bg-card p-5">
-          <CustomIcon icon="patch.svg" folder={iconFolder} alt="Role Preview" className="mb-4 h-8 w-8" />
-
           <h2 className="text-xl font-bold">Role Preview</h2>
-          <p className="mt-2 text-sm text-muted-foreground">{editing.name || 'Unnamed Custom Role'}</p>
+          {isEditingExisting ? (
+            <p className="mt-2 text-sm text-[#153e90] dark:text-[#6ee75a]">
+              Editing: <span className="font-semibold">{editing.name || 'Unnamed profile'}</span>
+            </p>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {editing.name ? `Draft: ${editing.name}` : 'Create or select a profile to edit'}
+            </p>
+          )}
 
-          <div className="mt-5 grid gap-3 text-sm md:grid-cols-4">
+          <div className="mt-5 grid gap-3 text-sm md:grid-cols-3">
             <div className="border border-border p-3">
-              <div className="text-2xl font-bold">{selectedModuleCount}</div>
+              <div className="text-2xl font-bold">{enabledModules.length}</div>
               <div className="text-muted-foreground">Modules</div>
             </div>
 
             <div className="border border-border p-3">
-              <div className="text-2xl font-bold">{selectedPermissionCount}</div>
+              <div className="text-2xl font-bold">{editing.permissionKeys.length}</div>
               <div className="text-muted-foreground">Permissions</div>
             </div>
 
             <div className="border border-border p-3">
               <div className="text-sm font-semibold">Parent Role</div>
-              <div className="mt-1 text-muted-foreground">{getParentRoleName(editing.parentRoleId)}</div>
-            </div>
-
-            <div className="border border-border p-3">
-              <div className="text-sm font-semibold">Scope</div>
-              <div className="mt-1 text-muted-foreground">
-                {editing.companyScope} / {editing.branchScope}
-              </div>
+              <div className="mt-1 text-muted-foreground">{getParentRoleName(editing.parent_role_id)}</div>
             </div>
           </div>
         </div>
 
         <div className="border border-border bg-card p-4">
-          <h2 className="text-base font-bold">Assign Role</h2>
+          <h2 className="text-base font-bold">Assign Profile</h2>
 
           <div className="mt-3 space-y-3">
             <select
@@ -296,7 +381,7 @@ export default function RoleManagementPage() {
               className="h-10 w-full border border-border bg-background px-3 text-sm"
             >
               <option value="">Select user</option>
-              {users.map((demoUser) => (
+              {assignableUsers.map((demoUser) => (
                 <option key={demoUser.id} value={demoUser.id}>
                   {demoUser.fullName}
                 </option>
@@ -304,25 +389,24 @@ export default function RoleManagementPage() {
             </select>
 
             <select
-              value={selectedRoleId}
-              onChange={(event) => setSelectedRoleId(event.target.value)}
+              value={selectedProfileId}
+              onChange={(event) => setSelectedProfileId(event.target.value)}
               className="h-10 w-full border border-border bg-background px-3 text-sm"
             >
-              <option value="">Select role</option>
-              {roles.map((role) => (
-                <option key={role.id} value={role.id}>
-                  {role.name}
+              <option value="">Select permission profile</option>
+              {assignableProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
                 </option>
               ))}
             </select>
 
             <button
               type="button"
-              onClick={assignRole}
-              disabled={!can('roles.assign')}
-              className="inline-flex w-full items-center justify-center gap-2 bg-[#153e90] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+              onClick={() => void assignRole()}
+              disabled={!can('roles.assign') || saving}
+              className="inline-flex w-full items-center justify-center bg-[#153e90] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50 dark:bg-[#6ee75a] dark:text-black"
             >
-              <CustomIcon icon="students.svg" folder={iconFolder} alt="Assign Role" className="h-4 w-4" />
               Assign
             </button>
           </div>
@@ -335,34 +419,71 @@ export default function RoleManagementPage() {
         </div>
       )}
 
-      <div className="border border-border bg-card p-5">
-        <h2 className="text-xl font-bold">Role Details</h2>
+      <div
+        ref={profileDetailsRef}
+        className={`border bg-card p-5 ${
+          isEditingExisting
+            ? 'border-[#153e90] dark:border-[#6ee75a]'
+            : 'border-border'
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold">Profile Details</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {isEditingExisting
+                ? 'Change the profile name here, then save. Custom profiles can be renamed.'
+                : 'Fill in details for a new custom profile, then save.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {can('roles.create') && (
+              <button
+                type="button"
+                onClick={startNewProfile}
+                className="border border-border px-4 py-2 text-sm font-semibold hover:bg-muted"
+              >
+                New Profile
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={!canSaveProfile || saving || isLockedProfile}
+              onClick={() => void saveRole()}
+              className="inline-flex items-center gap-2 bg-[#153e90] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 dark:bg-[#6ee75a] dark:text-black"
+            >
+              {saving ? 'Saving…' : isEditingExisting ? 'Save Profile' : 'Create Profile'}
+            </button>
+          </div>
+        </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <label className="space-y-2">
-            <span className="text-sm font-semibold">Custom Role Name</span>
+        {!canSaveProfile && !isLockedProfile && (
+          <p className="mt-3 text-sm text-amber-600 dark:text-amber-300">
+            {isEditingExisting
+              ? 'You need roles.edit permission to rename or update this profile.'
+              : 'You need roles.create permission to add a new profile.'}
+          </p>
+        )}
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label className="space-y-2 md:col-span-2 xl:col-span-1">
+            <span className="text-sm font-semibold">Profile Name</span>
             <input
               value={editing.name}
               onChange={(event) => setEditing({ ...editing, name: event.target.value })}
-              className="h-11 w-full border border-border bg-background px-3 outline-none"
-              placeholder="Example: HOD "
+              disabled={!canEditFields}
+              className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90] disabled:cursor-not-allowed disabled:opacity-60 dark:focus:border-[#6ee75a]"
+              placeholder="Example: HOD"
             />
           </label>
 
           <label className="space-y-2">
             <span className="text-sm font-semibold">Parent Role</span>
             <select
-              value={editing.parentRoleId || ''}
-              onChange={(event) => {
-                const parentRoleId = event.target.value
-
-                setEditing({
-                  ...editing,
-                  parentRoleId,
-                  level: getDefaultLevelByParent(parentRoleId),
-                })
-              }}
-              className="h-11 w-full border border-border bg-background px-3 outline-none"
+              value={editing.parent_role_id}
+              onChange={(event) => setEditing({ ...editing, parent_role_id: event.target.value })}
+              disabled={!canEditFields || editing.is_system}
+              className="h-11 w-full border border-border bg-background px-3 outline-none disabled:opacity-60"
             >
               <option value="">Select Parent Role</option>
               {parentRoles.map((role) => (
@@ -373,27 +494,15 @@ export default function RoleManagementPage() {
             </select>
           </label>
 
-
-          <label className="space-y-2">
-            <span className="text-sm font-semibold">Branch </span>
-            <select
-              value={editing.branchScope}
-              onChange={(event) => setEditing({ ...editing, branchScope: event.target.value })}
-              className="h-11 w-full border border-border bg-background px-3 outline-none"
-            >
-              <option value="all">All Branches</option>
-              <option value="b1">Kochi Main Branch</option>
-              <option value="b2">Calicut Satellite</option>
-              <option value="b3">Dubai Training Hub</option>
-            </select>
-          </label>
-
           <label className="space-y-2">
             <span className="text-sm font-semibold">Status</span>
             <select
               value={editing.status}
-              onChange={(event) => setEditing({ ...editing, status: event.target.value as DemoRole['status'] })}
-              className="h-11 w-full border border-border bg-background px-3 outline-none"
+              onChange={(event) =>
+                setEditing({ ...editing, status: event.target.value as EditingProfile['status'] })
+              }
+              disabled={!canEditFields}
+              className="h-11 w-full border border-border bg-background px-3 outline-none disabled:opacity-60"
             >
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
@@ -407,132 +516,183 @@ export default function RoleManagementPage() {
           <div>
             <h2 className="text-xl font-bold">Module and Permission Matrix</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Enable sidebar modules and select what actions this role can perform.
+              Permissions loaded from the Supabase permissions catalog.
             </p>
           </div>
 
           <button
-            disabled={!canManage}
+            disabled={!canSaveProfile || saving || isLockedProfile}
             type="button"
-            onClick={saveRole}
-            className="inline-flex items-center gap-2 bg-[#153e90] px-4 py-2 font-semibold text-white disabled:opacity-50"
+            onClick={() => void saveRole()}
+            className="inline-flex items-center bg-[#153e90] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 dark:bg-[#6ee75a] dark:text-black"
           >
-            <CustomIcon icon="tasks.svg" folder={iconFolder} alt="Save Role" className="h-4 w-4" />
-            Save Role
+            {saving ? 'Saving…' : 'Save Profile'}
           </button>
         </div>
 
         <div className="mt-5 overflow-x-auto">
-          <table className="w-full min-w-[1100px] border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left">
-                <th className="px-4 py-3">Module</th>
-                <th className="px-4 py-3">Sidebar</th>
-                {permissionActions.map((action) => (
-                  <th key={action} className="px-3 py-3 text-center capitalize">
-                    {action}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-
-            <tbody>
-              {demoModules.map((module) => (
-                <tr key={module.id} className="border-b border-border">
-                  <td className="px-4 py-3">
-                    <p className="font-semibold">{module.label}</p>
-                    <p className="text-xs text-muted-foreground">{module.description}</p>
-                  </td>
-
-                  <td className="px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={editing.enabledModules.includes(module.id)}
-                      onChange={() => toggleModule(module.id)}
-                      className="h-4 w-4"
-                    />
-                  </td>
-
-                  {permissionActions.map((action) => {
-                    const available = module.actions.includes(action)
-                    const key = `${module.id}.${action}` as PermissionKey
-
-                    return (
-                      <td key={action} className="px-3 py-3 text-center">
-                        <input
-                          type="checkbox"
-                          disabled={!available}
-                          checked={editing.permissions.includes(key)}
-                          onChange={() => togglePermission(module.id, action)}
-                          className="h-4 w-4 disabled:opacity-20"
-                        />
-                      </td>
-                    )
-                  })}
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading permission catalog…</p>
+          ) : (
+            <table className="w-full min-w-[1100px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-left">
+                  <th className="px-4 py-3">Module</th>
+                  <th className="px-4 py-3">Sidebar</th>
+                  {actions.map((action) => (
+                    <th key={action} className="px-3 py-3 text-center capitalize">
+                      {action}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+
+              <tbody>
+                {moduleGroups.map((module) => (
+                  <tr key={module.module_id} className="border-b border-border">
+                    <td className="px-4 py-3">
+                      <p className="font-semibold">{module.label}</p>
+                      <p className="text-xs text-muted-foreground">{module.module_id}</p>
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={enabledModules.includes(module.module_id)}
+                        onChange={() => toggleModule(module.module_id)}
+                        disabled={!canEditFields}
+                        className="h-4 w-4"
+                      />
+                    </td>
+
+                    {actions.map((action) => {
+                      const permission = module.permissions.find((item) => item.action === action)
+                      const permissionKey = permission?.permission_key as PermissionKey | undefined
+
+                      return (
+                        <td key={action} className="px-3 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            disabled={!permissionKey || !canEditFields}
+                            checked={permissionKey ? editing.permissionKeys.includes(permissionKey) : false}
+                            onChange={() => permissionKey && togglePermission(permissionKey)}
+                            className="h-4 w-4 disabled:opacity-20"
+                          />
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
+
       <div className="border border-border bg-card p-5">
-        <h2 className="text-xl font-bold">Saved Roles</h2>
+        <h2 className="text-xl font-bold">Permission Profiles</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          System and custom profiles from Supabase. Available on every branch.
+        </p>
 
-        <div className="mt-5 overflow-x-auto">
-          <table className="w-full min-w-[980px] text-sm">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left">
-                <th className="px-4 py-3">Role</th>
-                <th className="px-4 py-3">Parent Role</th>
-                <th className="px-4 py-3">Level</th>
-                <th className="px-4 py-3">Scope</th>
-                <th className="px-4 py-3">Modules</th>
-                <th className="px-4 py-3">Permissions</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
+        {loading && <p className="mt-5 text-sm text-muted-foreground">Loading permission profiles…</p>}
 
-            <tbody>
-              {roles.map((role) => (
-                <tr key={role.id} className="border-b border-border">
-                  <td className="px-4 py-3 font-semibold">{role.name}</td>
-                  <td className="px-4 py-3">{getRoleCategoryName(role)}</td>
-                  <td className="px-4 py-3">{role.level}</td>
-                  <td className="px-4 py-3">
-                    {role.companyScope} / {role.branchScope}
-                  </td>
-                  <td className="px-4 py-3">{role.enabledModules.length}</td>
-                  <td className="px-4 py-3">{role.permissions.length}</td>
-                  <td className="px-4 py-3">
-                    <span className="border border-border px-2 py-1 text-xs capitalize">{role.status}</span>
-                  </td>
+        {!loading && !profiles.length && (
+          <p className="mt-5 text-sm text-muted-foreground">No permission profiles found in Supabase.</p>
+        )}
 
-                  <td className="px-4 py-3">
-                    {role.id === 'superadmin' ? (
-                      <span className="text-xs text-muted-foreground">Locked</span>
-                    ) : (
-                      <div className="flex justify-end gap-2">
-                        <button onClick={() => editRole(role)} className="border border-border p-2 hover:bg-accent">
-                          <CustomIcon icon="submissions.svg" folder={iconFolder} alt="Edit" className="h-4 w-4" />
-                        </button>
-
-                        <button onClick={() => duplicateRole(role)} className="border border-border p-2 hover:bg-accent">
-                          <CustomIcon icon="workstream.svg" folder={iconFolder} alt="Duplicate" className="h-4 w-4" />
-                        </button>
-
-                        <button onClick={() => deleteRole(role.id)} className="border border-border p-2 hover:bg-red-500/10">
-                          <CustomIcon icon="reviews.svg" folder={iconFolder} alt="Delete" className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </td>
+        {!loading && profiles.length > 0 && (
+          <div className="mt-5 overflow-x-auto">
+            <table className="w-full min-w-[900px] table-fixed border-collapse text-sm">
+              <colgroup>
+                <col className="w-[180px]" />
+                <col className="w-[140px]" />
+                <col className="w-[88px]" />
+                <col className="w-[108px]" />
+                <col className="w-[88px]" />
+                <col className="w-[320px]" />
+              </colgroup>
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-left">
+                  <th className="whitespace-nowrap px-4 py-3">Profile</th>
+                  <th className="whitespace-nowrap px-4 py-3">Parent Role</th>
+                  <th className="whitespace-nowrap px-4 py-3">Modules</th>
+                  <th className="whitespace-nowrap px-4 py-3">Permissions</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-center">Status</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+
+              <tbody>
+                {profilesByParentRole.flatMap(({ parentRole, profiles: groupedProfiles }) =>
+                  groupedProfiles.map((profile) => {
+                    const moduleCount = enabledModulesFromPermissionKeys(profile.permissions).length
+
+                    return (
+                      <tr key={profile.id} className="border-b border-border">
+                        <td className="truncate px-4 py-3 font-semibold">{profile.name}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{parentRole.name}</td>
+                        <td className="whitespace-nowrap px-4 py-3">{moduleCount}</td>
+                        <td className="whitespace-nowrap px-4 py-3">{profile.permissions.length}</td>
+                        <td className="whitespace-nowrap px-4 py-3">
+                        <div className="flex items-center gap-2">
+                        <button
+                                type="button"
+                                disabled={profile.status === 'active' || saving || !can('roles.edit')}
+                                onClick={() => void setProfileStatus(profile, 'active')}
+                                className={getStatusButtonClass(profile.status, 'active')}
+                              >
+                                Active
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={profile.status === 'inactive' || saving || !can('roles.edit')}
+                                onClick={() => void setProfileStatus(profile, 'inactive')}
+                                className={getStatusButtonClass(profile.status, 'inactive')}
+                              >
+                                Inactive
+                              </button>
+                              </div>
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-3 text-right">
+                          {isSuperAdminProfile(profile) ? (
+                            <span className="inline-flex min-w-[280px] justify-end text-xs text-muted-foreground">
+                              Locked · Active
+                            </span>
+                          ) : (
+                            <div className="inline-flex min-w-[280px] justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => editRole(profile)}
+                                className="border border-border px-3 py-1.5 text-xs font-semibold hover:bg-muted"
+                              >
+                                Edit
+                              </button> 
+
+
+
+                              <button
+                                type="button"
+                                disabled={profile.is_system || saving}
+                                onClick={() => void deleteRole(profile)}
+                                className="border border-red-500/30 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-500/10 disabled:opacity-40"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  }),
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   )

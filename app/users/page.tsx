@@ -1,10 +1,11 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import { useTheme } from 'next-themes'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { useDemoAuth } from '@/lib/demo/auth'
-import { branches, companies, demoModules } from '@/lib/demo/seed'
+import { companies, demoModules } from '@/lib/demo/seed'
 import type { DemoUser } from '@/lib/demo/types'
 
 const parentRoles = [
@@ -58,6 +59,7 @@ function createEmptyUser(): DemoUser {
 
 export default function Page() {
   const { users, roles, updateUsers, user, role, can } = useDemoAuth()
+  const { activeBranchId, allowedBranches } = useBranchScope()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
 
@@ -69,6 +71,12 @@ export default function Page() {
   const [branchFilter, setBranchFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [notice, setNotice] = useState('')
+
+  useEffect(() => {
+    if (activeBranchId) {
+      setBranchFilter(activeBranchId)
+    }
+  }, [activeBranchId])
 
   const selectedUser = useMemo(() => {
     return users.find((item) => item.id === selectedUserId) || users[0]
@@ -91,7 +99,10 @@ export default function Page() {
         item.roleId.toLowerCase().includes(term)
 
       const matchesRole = roleFilter === 'all' || item.roleId === roleFilter
-      const matchesBranch = branchFilter === 'all' || item.branchId === branchFilter
+      const matchesBranch =
+        branchFilter === 'all' ||
+        item.branchId === branchFilter ||
+        item.branchId === 'all'
       const matchesStatus = statusFilter === 'all' || item.status === statusFilter
 
       return matchesSearch && matchesRole && matchesBranch && matchesStatus
@@ -115,7 +126,7 @@ export default function Page() {
 
   const getBranchName = (branchId?: string) => {
     if (!branchId || branchId === 'all') return 'All Branches'
-    return branches.find((item) => item.id === branchId)?.name || branchId
+    return allowedBranches.find((item) => item.id === branchId)?.name || branchId
   }
 
   const getAccessScope = (item: DemoUser) => {
@@ -379,7 +390,7 @@ export default function Page() {
                     className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
                   >
                     <option value="all">All Branches</option>
-                    {branches.map((item) => (
+                    {allowedBranches.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
                       </option>
@@ -458,7 +469,7 @@ export default function Page() {
                   className="h-10 w-full border border-border bg-background px-3 text-sm outline-none focus:border-[#153e90]"
                 >
                   <option value="all">All Branches</option>
-                  {branches.map((item) => (
+                  {allowedBranches.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.name}
                     </option>

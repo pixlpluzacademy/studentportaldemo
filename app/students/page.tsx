@@ -5,6 +5,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { useDemoAuth } from '@/lib/demo/auth'
 import {
   batches,
@@ -114,6 +115,7 @@ const getAttendanceNumber = (attendanceValue: string) => {
 
 export default function Page() {
   const { can, user, role } = useDemoAuth()
+  const { filterByActiveBatches } = useBranchScope()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
 
@@ -188,10 +190,12 @@ export default function Page() {
   }, [ismentorView, currentUserName])
 
   const scopedStudents = useMemo(() => {
-    if (!ismentorView) return students
+    const mentorScoped = !ismentorView
+      ? students
+      : students.filter((student) => assignedBatchNames.includes(student.batch))
 
-    return students.filter((student) => assignedBatchNames.includes(student.batch))
-  }, [students, ismentorView, assignedBatchNames])
+    return filterByActiveBatches(mentorScoped, (student) => student.batch)
+  }, [students, ismentorView, assignedBatchNames, filterByActiveBatches])
 
   const courseOptions = useMemo(() => {
     return Array.from(new Set(scopedStudents.map((student) => student.course).filter(Boolean))).sort()

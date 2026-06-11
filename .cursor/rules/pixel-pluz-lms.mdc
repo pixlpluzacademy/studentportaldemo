@@ -1,0 +1,158 @@
+---
+description: Pixel Pluz LMS Portal — product scope, permission model, UI constraints, Supabase migration, and coding workflow
+alwaysApply: true
+---
+
+# Pixel Pluz LMS Portal
+
+## Product scope
+
+- **Pixel Pluz LMS Portal** is a training/education management system for **Pixel Pluz Academy** only.
+- This is an **LMS / academic portal**, **not** a CRM and **not** a full company ERP.
+- Do not build heavy company management. Keep companies minimal (single academy + branches).
+- **NEO Digital Hub**: optional `staff_source` / `organisation_source` field (`internal`, `neo_digital_hub`, `external`) for display/reporting only — not main access control.
+
+## Tech stack
+
+- Next.js 16 App Router, React 19, TypeScript, Tailwind CSS 4, Radix/shadcn UI, pnpm
+- Backend: **Supabase Auth, Postgres, RLS, Storage**
+- No separate backend server unless explicitly requested
+- Prefer `@supabase/ssr` + cookie sessions for App Router auth
+
+## Access model (critical)
+
+Access is **permission-based with fixed parent roles** — not simple role-only checks.
+
+```
+Parent Role → Permission Profile → Permissions → Assignments (scope)
+```
+
+### Fixed parent roles (backend categories only)
+
+1. Super Admin
+2. Company Admin
+3. Branch Admin
+4. Mentor
+5. Student
+6. Placement
+
+### Permission profiles (customizable)
+
+- HOD, Trainer, Normal Mentor, Final QA, and **future profiles** live under the correct parent (usually **Mentor**).
+- **Do not** hardcode access by names like HOD, Trainer, QA, or Teacher in page logic.
+- **Do not** treat HOD / Final QA as parent roles in the database.
+- Super Admin: single system owner — **not creatable multiple times from UI**.
+
+### Permissions
+
+Actions: `view`, `create`, `edit`, `delete`, `assign`, `review`, `approve`, `upload`, `download`, `export`, `lock`, `submit`, `mark`, `reply`, `resolve`, `validate`
+
+Module keys follow existing demo pattern: `{moduleId}.{action}` (e.g. `students.view`, `attendance.mark`).
+
+Reuse `ModuleId`, `PermissionAction`, `PermissionKey` from `lib/demo/types.ts` when possible.
+
+### Assignments (data scope)
+
+Access = parent role + permission profile + permissions + assigned branch/batch/students/mentors.
+
+LMS hierarchy: **Branch → Batch → HOD → Mentor → Students**
+
+- Department/skill area connects courses and eligible mentors.
+- Batch assignment controls who accesses that batch.
+- Reports-to / HOD assignment controls who sees which mentors/students.
+
+## Module rules (enforce in queries + RLS)
+
+### Attendance (`/attendance`)
+
+- Tabs: **View Attendance** (default) and **Mark Attendance**
+- View flow: batch summary → batch students → student day-wise attendance
+- Mark: **today only** — no past/future dates
+- Online batch: class link allowed when marking; **hide class link** in student day-wise view
+- No export button for now
+- Scope: admins by branch; HOD by assigned batches/mentors; mentor/trainer by assigned batches; student own data only
+
+### Students (`/students`, `/students/[id]`)
+
+- Mentor/trainer: assigned batches only
+- HOD: students under assigned batches and mentors
+- Admins: branch scope + permissions
+- Student: own data only
+
+### Mentors (`/mentors`, `/mentors/[id]`)
+
+- HOD: mentors assigned under them
+- Admins: branch scope + permissions
+- Scope from `batch_staff_assignments` + permissions
+
+### Class materials (`/class-materials`)
+
+- Mentor/HOD upload daily notes
+- Online batches: notes + optional class/video link
+- Offline batches: notes only
+- Students: view/download; open links for own batch
+
+### Tasks / submissions / marks
+
+- Tasks by batch or student; students see assigned tasks only
+- **No submit after due date**
+- Review chain: mentor → HOD → Final QA (by permissions)
+- Final QA may lock evaluation if permitted
+- Marks: mentor, HOD, Final QA scores, final score, comments, status
+
+## Data layers in this repo
+
+### Main LMS (migrate to Supabase)
+
+- Auth: `lib/demo/auth.tsx` → replace with Supabase auth (keep `can()` / `canModule()` hook shape where possible)
+- Seed: `lib/demo/seed.ts` → reference for migrations only; do not delete until pages are migrated
+- Pages using demo auth/seed: dashboard, users, role-management, branches, courses, batches, students, mentors, attendance, tasks, submissions, marks, placement, certificates, complaints, reports, settings, my-courses, class-materials
+
+### Legacy (do not merge into main LMS model)
+
+- `lib/mock-data.ts`, `lib/data-context.tsx`, `lib/workstream-data.ts`, `lib/app-context.tsx`
+- Routes: workstreams, projects, cohorts, analytics, admissions, review-studio, old `submissions/*`, `allusers/*`, `attendance/[id]`
+- Old API routes (`app/api/admin/*`) expect outdated schema — rewrite when touching auth/users
+
+## UI rules (do not break)
+
+- **Do not change layout or page structure** unless the user explicitly asks
+- **Do not reduce code** or remove unrelated features
+- When updating a file the user requests: provide **full updated file code**
+- Preserve existing page structure; change only requested parts
+- Tables: no full-page horizontal overflow — use table container `overflow-x-auto` only
+- Icons: use custom SVGs from `public/icons/dark-mode` and `public/icons/light-mode`
+- Avoid Lucide icons unless the user asks
+
+### Visual style
+
+- Modern SaaS dashboard, dark-mode focused
+- Cards: `border border-border bg-card` — no gradients, corner glow, or decorative corner borders
+- Inputs: `bg-background` with thin border
+- Tables: clean; header `bg-muted/40`
+- Buttons: `#153e90` light mode, `#6ee75a` dark mode
+- Accents: blue (light), green (dark)
+- No unnecessary redesign
+
+## Development workflow
+
+1. Inspect existing structure and identify exact files before coding
+2. Briefly explain which files will change; **wait for confirmation** unless user asks for full code directly
+3. Work **phase by phase** — one module at a time
+4. Minimize scope; match existing conventions; no over-engineering
+5. Never commit unless user asks; never expose secrets from `.env.local`
+
+## Migration phases
+
+1. **Phase 1**: Supabase schema (auth, profiles, parent roles, permission profiles, permissions, branches, departments, courses, batches, staff assignments, students), replace demo auth, `middleware.ts`, RLS
+2. **Phase 2**: Wire users, roles, permissions, branches, departments, courses, batches, mentors, students
+3. **Phase 3**: Attendance, class materials, tasks, submissions, marks, HOD review, final QA
+4. **Phase 4**: Placement, certificates, complaints, reports, settings, Storage, testing, deployment
+
+## Supabase env (already in project)
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (server-only; never client)
+
+Expected new folders/files when implementing: `supabase/migrations/`, `lib/supabase/server.ts`, `lib/auth/*`, `middleware.ts`

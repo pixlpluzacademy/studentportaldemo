@@ -1,15 +1,16 @@
 'use client'
 
-import { FormEvent, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useDemoAuth } from '@/lib/demo/auth'
+import { demoBatchBranchMap } from '@/lib/data/branch-scope'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import {
   batches as demoBatches,
-  branches,
   courses,
   mentors,
 } from '@/lib/demo/seed'
@@ -480,7 +481,9 @@ const buildDemoStaffAssignments = (batchId: string, index: number): BatchStaffAs
   ]
 }
 
-const buildDemoBatches = (): DemoBatch[] => {
+const buildDemoBatches = (branchNavIds: string[]): DemoBatch[] => {
+  const branchMap = demoBatchBranchMap(branchNavIds)
+
   return demoBatches.map((batch, index) => {
     const course = courses.find((item) => item.name === batch.course) || courses[0]
     const courseType = courseTypeFromTrack(course.track)
@@ -515,7 +518,7 @@ const buildDemoBatches = (): DemoBatch[] => {
       created_by: 'demo',
       course_id: course.id,
       mentor_id: supportAssignment?.staff_id || null,
-      branch_id: branches[0]?.id || 'b1',
+      branch_id: branchMap[batch.id] || branchNavIds[0] || null,
       course_type: courseType,
       batch_mode: batchMode,
       class_day_type: index === 2 ? 'weekend' : 'weekdays',
@@ -541,10 +544,16 @@ const getAssignmentLevel = (assignment: BatchStaffAssignment) => {
 
 export default function Page() {
   const { user, role, can } = useDemoAuth()
+  const { activeBranchId, allowedBranches, filterByBranch } = useBranchScope()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
 
-  const [batches, setBatches] = useState<DemoBatch[]>(() => buildDemoBatches())
+  const branchNavIds = useMemo(
+    () => allowedBranches.map((branch) => branch.id),
+    [allowedBranches],
+  )
+
+  const [batches, setBatches] = useState<DemoBatch[]>([])
 
   const [filterCourseType, setFilterCourseType] = useState('all')
   const [filterCourse, setFilterCourse] = useState('all')
@@ -565,7 +574,7 @@ export default function Page() {
   const [academicLeadTitle, setAcademicLeadTitle] = useState('Academic Lead')
   const [supportMentorId, setSupportMentorId] = useState('nisha-varghese')
   const [supportMentorTitle, setSupportMentorTitle] = useState('Student Support Mentor')
-  const [branchId, setBranchId] = useState(branches[0]?.id || 'b1')
+  const [branchId, setBranchId] = useState('')
   const [durationMonths, setDurationMonths] = useState('1')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
@@ -580,6 +589,26 @@ export default function Page() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!branchNavIds.length) {
+      setBatches([])
+      return
+    }
+
+    setBatches(buildDemoBatches(branchNavIds))
+  }, [branchNavIds.join('|')])
+
+  useEffect(() => {
+    if (activeBranchId) {
+      setBranchId(activeBranchId)
+    }
+  }, [activeBranchId])
+
+  const branchScopedBatches = useMemo(
+    () => filterByBranch(batches, (batch) => batch.branch_id),
+    [batches, filterByBranch],
+  )
 
   const canCreateBatch = can('batches.create')
   const canEditBatch = can('batches.edit')
@@ -622,7 +651,7 @@ export default function Page() {
   }
 
   const filteredBatches = useMemo(() => {
-    return batches.filter((batch) => {
+    return branchScopedBatches.filter((batch) => {
       if (!canCurrentUserSeeBatch(batch)) return false
 
       const enrolledCount = batch.enrolled_count || 0
@@ -647,7 +676,7 @@ export default function Page() {
       )
     })
   }, [
-    batches,
+    branchScopedBatches,
     filterCourseType,
     filterCourse,
     filterMode,
@@ -663,31 +692,31 @@ export default function Page() {
 
   const yearOptions = useMemo(() => {
     return Array.from(
-      new Set(batches.map((batch) => getYearFromDate(batch.start_date)).filter(Boolean))
+      new Set(branchScopedBatches.map((batch) => getYearFromDate(batch.start_date)).filter(Boolean))
     ).sort((a, b) => Number(b) - Number(a))
-  }, [batches])
+  }, [branchScopedBatches])
 
   const monthOptions = useMemo(() => {
     return Array.from(
-      new Set(batches.map((batch) => getMonthFromDate(batch.start_date)).filter(Boolean))
+      new Set(branchScopedBatches.map((batch) => getMonthFromDate(batch.start_date)).filter(Boolean))
     ).sort((a, b) => Number(a) - Number(b))
-  }, [batches])
+  }, [branchScopedBatches])
 
   const startTimeOptions = useMemo(() => {
     return Array.from(
-      new Set(batches.map((batch) => batch.batch_start_time).filter(Boolean) as string[])
+      new Set(branchScopedBatches.map((batch) => batch.batch_start_time).filter(Boolean) as string[])
     ).sort()
-  }, [batches])
+  }, [branchScopedBatches])
 
   const durationOptions = useMemo(() => {
     return Array.from(
       new Set(
-        batches
+        branchScopedBatches
           .map((batch) => (batch.duration_months ? String(batch.duration_months) : ''))
           .filter(Boolean)
       )
     ).sort((a, b) => Number(a) - Number(b))
-  }, [batches])
+  }, [branchScopedBatches])
 
   const activeCount = filteredBatches.filter((batch) => batch.status === 'active').length
   const inactiveCount = filteredBatches.filter((batch) => batch.status === 'inactive').length
@@ -1097,7 +1126,7 @@ export default function Page() {
             <div className="space-y-4">
               {filteredBatches.map((batch) => {
                 const course = courses.find((item) => item.id === batch.course_id)
-                const branch = branches.find((item) => item.id === batch.branch_id)
+                const branch = allowedBranches.find((item) => item.id === batch.branch_id)
                 const enrolledCount = batch.enrolled_count || 0
                 const maxSeatCount = batch.max_seats || 0
                 const isFull = maxSeatCount > 0 && enrolledCount >= maxSeatCount
@@ -1393,7 +1422,7 @@ export default function Page() {
                 <div>
                   <label className="mb-2 block text-sm font-medium">Branch</label>
                   <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className={selectClass} required>
-                    {branches.map((branch) => (
+                    {allowedBranches.map((branch) => (
                       <option key={branch.id} value={branch.id} className={optionClass}>
                         {branch.name}
                       </option>

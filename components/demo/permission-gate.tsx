@@ -3,14 +3,22 @@
 import Link from 'next/link'
 import { Lock } from 'lucide-react'
 import { usePathname } from 'next/navigation'
-import { getModuleByHref, useDemoAuth } from '@/lib/demo/auth'
+import { getModuleByHref, useAuth } from '@/lib/auth/provider'
 
 export function PermissionGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const { user, canModule } = useDemoAuth()
+  const { user, canModule, sessionState } = useAuth()
   const module = getModuleByHref(pathname)
 
   if (pathname === '/login' || pathname === '/') return <>{children}</>
+
+  if (sessionState === 'loading') {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center">
+        <p className="text-sm text-muted-foreground">Loading session...</p>
+      </div>
+    )
+  }
 
   if (!user) {
     return (
@@ -18,7 +26,7 @@ export function PermissionGate({ children }: { children: React.ReactNode }) {
         <div className="max-w-md border border-[#153e90]/25 bg-card p-8 text-center">
           <Lock className="mx-auto mb-4 h-10 w-10 text-[#153e90] dark:text-[#6ee75a]" />
           <h1 className="text-2xl font-bold">Login Required</h1>
-          <p className="mt-2 text-muted-foreground">Please login to access the demo portal.</p>
+          <p className="mt-2 text-muted-foreground">Please login to access the portal.</p>
           <Link href="/login" className="mt-6 inline-flex bg-[#153e90] px-5 py-3 font-semibold text-white">Go to Login</Link>
         </div>
       </div>

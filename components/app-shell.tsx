@@ -16,8 +16,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { APP_DISPLAY_NAME, storageKeys } from '@/lib/branding'
-import { branches } from '@/lib/demo/seed'
+import { APP_DISPLAY_NAME } from '@/lib/branding'
+import { useActiveBranch } from '@/lib/data/active-branch-context'
 import type { ModuleId } from '@/lib/demo/types'
 import { useDemoAuth } from '@/lib/demo/auth'
 import { PermissionGate } from '@/components/demo/permission-gate'
@@ -29,7 +29,6 @@ import {
   LogOut,
   Moon,
   Settings,
-  ShieldCheck,
   Sun,
   User,
 } from 'lucide-react'
@@ -142,31 +141,26 @@ function routeIsActive(pathname: string, href: string) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { resolvedTheme, setTheme } = useTheme()
-  const { user, role, logout, canModule, roles, switchRole } = useDemoAuth()
+  const { user, role, logout, canModule } = useDemoAuth()
+
+  const {
+    activeBranchId,
+    activeBranch,
+    allowedBranches,
+    loading: branchesLoading,
+    setActiveBranchId,
+  } = useActiveBranch()
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mounted, setMounted] = useState(false)
-  const [branchId, setBranchId] = useState('b1')
   const [branchOpen, setBranchOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     setMounted(true)
-
-    const savedBranch = localStorage.getItem(storageKeys.activeBranch)
-    if (savedBranch) setBranchId(savedBranch)
   }, [])
 
   const logoSrc = mounted && resolvedTheme === 'light' ? '/pixlpluz-dark-logo.svg' : '/pixlpluz-white-logo.svg'
-
-  const allowedBranches = useMemo(() => {
-    if (!user || user.branchId === 'all' || role?.id === 'superadmin') return branches
-    return branches.filter((branch) => branch.id === user.branchId)
-  }, [user, role])
-
-  const activeBranch = useMemo(() => {
-    return allowedBranches.find((branch) => branch.id === branchId) || allowedBranches[0] || branches[0]
-  }, [allowedBranches, branchId])
 
   const visibleNavGroups = useMemo(() => {
     return navGroups
@@ -192,7 +186,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     .slice(0, 2)
     .toUpperCase()
 
-  const branchLabel = activeBranch?.name?.replace(' Main Branch', '').replace(' Branch', '') || 'Kochi'
+  const branchLabel = branchesLoading
+    ? 'Loading…'
+    : activeBranch?.name || (allowedBranches.length ? 'Select branch' : 'No branches')
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -333,25 +329,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-card px-6">
           <p className="hidden text-sm text-muted-foreground md:block">
-            {APP_DISPLAY_NAME} demo · Active branch: <strong className="text-foreground">{branchLabel}</strong>
+            {APP_DISPLAY_NAME} · Active branch:{' '}
+            <strong className="text-foreground">{branchLabel}</strong>
+            {activeBranch?.code ? (
+              <span className="ml-1 text-xs text-muted-foreground">({activeBranch.code})</span>
+            ) : null}
           </p>
 
           <div className="flex items-center gap-3">
             <div className="relative">
-              <Button type="button" variant="outline" onClick={() => setBranchOpen((prev) => !prev)} className="gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setBranchOpen((prev) => !prev)}
+                className="gap-2"
+                disabled={branchesLoading || allowedBranches.length === 0}
+              >
                 Branch: {branchLabel}
                 <ChevronDown className={cn('h-4 w-4 transition-transform', branchOpen && 'rotate-180')} />
               </Button>
 
-              {branchOpen && (
-                <div className="absolute right-0 top-11 z-50 w-48 overflow-hidden border border-border bg-card shadow-xl">
+              {branchOpen && allowedBranches.length > 0 && (
+                <div className="absolute right-0 top-11 z-50 w-56 overflow-hidden border border-border bg-card shadow-xl">
                   {allowedBranches.map((branch) => (
                     <button
                       key={branch.id}
                       type="button"
                       onClick={() => {
-                        setBranchId(branch.id)
-                        localStorage.setItem(storageKeys.activeBranch, branch.id)
+                        setActiveBranchId(branch.id)
                         setBranchOpen(false)
                       }}
                       className={cn(
@@ -359,7 +364,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         activeBranch?.id === branch.id && 'bg-[#153e90]/10 font-semibold text-[#153e90] dark:bg-white/10 dark:text-white'
                       )}
                     >
-                      {branch.name.replace(' Main Branch', '').replace(' Branch', '')}
+                      <span className="block truncate">{branch.name}</span>
+                      {branch.code && (
+                        <span className="text-xs text-muted-foreground">{branch.code}</span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -369,38 +377,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Button type="button" variant="outline" size="icon" onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}>
               {mounted && resolvedTheme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
             </Button>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex h-9 items-center gap-2 border border-border bg-background px-3 text-sm font-semibold text-foreground transition-colors hover:bg-muted">
-                  <ShieldCheck className="h-4 w-4 text-[#153e90] dark:text-[#6ee75a]" />
-                  <span>{role?.name || 'Super Admin'}</span>
-                  <ChevronDown className="h-4 w-4 opacity-70" />
-                </button>
-              </DropdownMenuTrigger>
-
-              <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuLabel>
-                  <div className="space-y-1">
-                    <p className="text-sm font-semibold">Switch Demo Role</p>
-                    <p className="text-xs font-normal text-muted-foreground">Preview the portal access by role.</p>
-                  </div>
-                </DropdownMenuLabel>
-
-                <DropdownMenuSeparator />
-
-                {roles.map((item) => (
-                  <DropdownMenuItem
-                    key={item.id}
-                    onClick={() => switchRole(item.id)}
-                    className={cn('cursor-pointer justify-between', user?.roleId === item.id && 'bg-muted font-semibold')}
-                  >
-                    <span>{item.name}</span>
-                    {user?.roleId === item.id && <span className="text-xs text-[#153e90] dark:text-[#6ee75a]">Active</span>}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
 
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="h-5 w-5" />

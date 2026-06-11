@@ -2,7 +2,8 @@ import type { Metadata } from 'next'
 import localFont from 'next/font/local'
 import { Analytics } from '@vercel/analytics/next'
 import { APP_DESCRIPTION, APP_DISPLAY_NAME } from '@/lib/branding'
-import { DemoAuthProvider } from '@/lib/demo/auth'
+import { AuthProvider } from '@/lib/auth/provider'
+import { ActiveBranchProvider } from '@/lib/data/active-branch-context'
 import { ThemeProvider } from '@/components/theme-provider'
 import { AppShell } from '@/components/app-shell'
 import './globals.css'
@@ -51,7 +52,11 @@ export default function RootLayout({
         className={`${redHatDisplay.variable} font-sans antialiased bg-background text-foreground`}
       >
         <ThemeProvider>
-          <DemoAuthProvider><AppShell>{children}</AppShell></DemoAuthProvider>
+          <AuthProvider>
+            <ActiveBranchProvider>
+              <AppShell>{children}</AppShell>
+            </ActiveBranchProvider>
+          </AuthProvider>
         </ThemeProvider>
         <Analytics />
       </body>
