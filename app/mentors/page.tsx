@@ -1,28 +1,37 @@
 'use client'
 
-import { FormEvent, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useDemoAuth } from '@/lib/demo/auth'
-import { mentors as demoMentors } from '@/lib/demo/seed'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { useAuth } from '@/lib/auth/provider'
+import { useMentorDirectory } from '@/lib/data/hooks/use-mentors'
+import {
+  createMentorAccount,
+  deleteMentorAccount,
+  MENTOR_HOD_SLUG,
+  updateMentorRecord,
+  type MentorFormInput,
+  type MentorListRow,
+  type MentorUiStatus,
+} from '@/lib/data/mentors'
+import { createClient } from '@/lib/supabase/client'
 
-type MentorStatus = 'active' | 'inactive'
-
-type DemoMentor = {
-  id: string
-  name: string
-  department: string
-  hod: string
-  batches: number
-  rating: string
-  status: MentorStatus
-  email?: string
-  phone?: string
-  joining_date?: string
-  mentor_type?: string
+type CreatedCredentials = {
+  fullName: string
+  email: string
+  password: string
 }
 
 function CustomIcon({
@@ -58,38 +67,7 @@ const selectClass =
 
 const optionClass = 'bg-[#111111] text-white'
 
-const buildDemoMentors = (): DemoMentor[] => {
-  return demoMentors.map((mentor, index) => ({
-    ...mentor,
-    status: mentor.status.toLowerCase() === 'active' ? 'active' : 'inactive',
-    email:
-      index === 0
-        ? 'mentor.one@pixlpluzportal.demo'
-        : index === 1
-          ? 'mentor.two@pixlpluzportal.demo'
-          : 'mentor.three@pixlpluzportal.demo',
-    phone:
-      index === 0
-        ? '+91 98765 43210'
-        : index === 1
-          ? '+91 98765 43211'
-          : '+91 98765 43212',
-    joining_date:
-      index === 0
-        ? '2026-05-01'
-        : index === 1
-          ? '2026-05-10'
-          : '2026-05-20',
-    mentor_type:
-      index === 0
-        ? 'Senior Mentor'
-        : index === 1
-          ? 'Mentor'
-          : 'Practical Trainer',
-  }))
-}
-
-const getStatusClass = (status: MentorStatus) => {
+function getStatusClass(status: MentorUiStatus) {
   if (status === 'active') {
     return 'border border-[#6ee75a]/30 bg-[#6ee75a]/10 px-3 py-1 text-xs font-medium text-[#6ee75a]'
   }
@@ -97,35 +75,115 @@ const getStatusClass = (status: MentorStatus) => {
   return 'border border-border bg-transparent px-3 py-1 text-xs font-medium text-muted-foreground'
 }
 
+function createEmptyForm(defaultProfileId: string, defaultDepartmentId: string): MentorFormInput {
+  return {
+    full_name: '',
+    email: '',
+    phone: '',
+    permission_profile_id: defaultProfileId,
+    department_id: defaultDepartmentId,
+    reports_to: null,
+    joining_date: '',
+    status: 'active',
+  }
+}
+
+async function getAccessToken() {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token || ''
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function formatCredentialsText(credentials: CreatedCredentials) {
+  return `Name: ${credentials.fullName}\nEmail: ${credentials.email}\nPassword: ${credentials.password}`
+}
+
+async function copyCredential(
+  label: string,
+  text: string,
+  setCopyNotice: (value: string) => void,
+) {
+  const copied = await copyToClipboard(text)
+  setCopyNotice(copied ? `${label} copied.` : `Could not copy ${label.toLowerCase()}.`)
+  window.setTimeout(() => setCopyNotice(''), 2000)
+}
+
+type SummaryCard = {
+  label: string
+  value: string | number
+  helper: string
+  icon: string
+}
+
+function mentorTypeIcon(slug: string) {
+  if (slug === 'mentor_hod') return 'reviews.svg'
+  if (slug === 'mentor_trainer') return 'patch.svg'
+  return 'mentors.svg'
+}
+
+function StatCard({ card, iconFolder }: { card: SummaryCard; iconFolder: string }) {
+  return (
+    <div className="border border-border bg-card p-5 transition hover:border-[#153e90]/40 dark:hover:border-[#6ee75a]/40">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm text-muted-foreground">{card.label}</p>
+          <div className="mt-3 text-3xl font-bold tracking-tight">{card.value}</div>
+        </div>
+
+        <div className="flex h-11 w-11 items-center justify-center bg-[#153e90]/10 dark:bg-[#6ee75a]/10">
+          <CustomIcon icon={card.icon} folder={iconFolder} alt={card.label} className="h-5 w-5" />
+        </div>
+      </div>
+
+      <p className="mt-4 text-xs text-muted-foreground">{card.helper}</p>
+    </div>
+  )
+}
+
 export default function Page() {
-  const { can, user, role } = useDemoAuth()
+  const searchParams = useSearchParams()
+  const { can, user, role } = useAuth()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
 
-  const [mentors, setMentors] = useState<DemoMentor[]>(() => buildDemoMentors())
+  const {
+    mentors,
+    departments,
+    mentorTypeProfiles,
+    activeBranchId,
+    activeBranch,
+    loading,
+    error: loadError,
+    reload,
+  } = useMentorDirectory()
 
   const [search, setSearch] = useState('')
-  const [filterdepartment, setFilterdepartment] = useState('all')
+  const [filterDepartment, setFilterDepartment] = useState('all')
   const [filterHod, setFilterHod] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterType, setFilterType] = useState('all')
 
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [phone, setPhone] = useState('')
-  const [department, setdepartment] = useState('')
-  const [hod, setHod] = useState('')
-  const [mentorType, setMentorType] = useState('Mentor')
-  const [joiningDate, setJoiningDate] = useState('')
-  const [rating, setRating] = useState('0')
-  const [status, setStatus] = useState<MentorStatus>('active')
+  const [form, setForm] = useState<MentorFormInput>(() => createEmptyForm('', ''))
 
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [loadingAction, setLoadingAction] = useState(false)
+  const [createdCredentials, setCreatedCredentials] = useState<CreatedCredentials | null>(null)
+  const [copyNotice, setCopyNotice] = useState('')
+
+  const defaultProfileId = mentorTypeProfiles[0]?.id || ''
+  const defaultDepartmentId = departments[0]?.id || ''
 
   const canCreateMentor = can('mentors.create')
   const canEditMentor = can('mentors.edit')
@@ -134,47 +192,74 @@ export default function Page() {
   const canAssignMentor = can('mentors.assign')
   const canManageMentors = canCreateMentor || canEditMentor || canAssignMentor
 
-  const currentRoleName = role?.name?.toLowerCase() || ''
-  const currentUserName = user?.fullName || ''
-  const isHodView =
-    currentRoleName.includes('hod') ||
-    currentRoleName.includes('superior mentor')
+  const isHodView = role?.id === 'hod'
+
+  const selectedMentorType = useMemo(() => {
+    return mentorTypeProfiles.find((profile) => profile.id === form.permission_profile_id) || null
+  }, [form.permission_profile_id, mentorTypeProfiles])
+
+  const isSelectedHodType = selectedMentorType?.slug === MENTOR_HOD_SLUG
+
+  useEffect(() => {
+    setFilterDepartment('all')
+    setFilterHod('all')
+    setFilterType('all')
+    setFilterStatus('all')
+    setSearch('')
+  }, [activeBranchId])
+
+  useEffect(() => {
+    const editId = searchParams.get('edit')
+    if (!editId || loading || !mentors.length) return
+
+    const item = mentors.find((row) => row.id === editId)
+    if (!item || editingId === editId) return
+
+    setForm({
+      full_name: item.full_name,
+      email: item.email,
+      phone: item.phone === 'Not added' ? '' : item.phone,
+      permission_profile_id: item.permission_profile_id || defaultProfileId,
+      department_id: item.department_id || defaultDepartmentId,
+      reports_to: item.reports_to,
+      joining_date: item.joining_date,
+      status: item.status,
+    })
+    setEditingId(item.id)
+    setIsModalOpen(true)
+  }, [defaultDepartmentId, defaultProfileId, editingId, loading, mentors, searchParams])
+
+  useEffect(() => {
+    if (!editingId && defaultProfileId) {
+      setForm((prev) =>
+        prev.full_name
+          ? prev
+          : createEmptyForm(defaultProfileId, defaultDepartmentId),
+      )
+    }
+  }, [defaultDepartmentId, defaultProfileId, editingId])
 
   const scopedMentors = useMemo(() => {
-    if (!isHodView) return mentors
-
-    return mentors.filter((mentor) => {
-      const mentorHod = mentor.hod.toLowerCase()
-      const userName = currentUserName.toLowerCase()
-      const roleName = role?.name?.toLowerCase() || ''
-
-      return (
-        mentorHod === userName ||
-        mentorHod === roleName ||
-        mentorHod.includes(userName) ||
-        mentorHod.includes('hod') ||
-        mentorHod.includes('superior mentor')
-      )
-    })
-  }, [mentors, isHodView, currentUserName, role?.name])
+    if (!isHodView || !user?.id) return mentors
+    return mentors.filter((mentor) => mentor.reports_to === user.id)
+  }, [mentors, isHodView, user?.id])
 
   const departmentOptions = useMemo(() => {
-    return Array.from(
-      new Set(scopedMentors.map((mentor) => mentor.department).filter(Boolean))
-    ).sort()
-  }, [scopedMentors])
+    return departments
+      .filter((item) => item.status === 'active')
+      .map((item) => ({ id: item.id, name: item.name }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [departments])
 
   const hodOptions = useMemo(() => {
-    return Array.from(
-      new Set(scopedMentors.map((mentor) => mentor.hod).filter(Boolean))
-    ).sort()
-  }, [scopedMentors])
-
-  const mentorTypeOptions = useMemo(() => {
-    return Array.from(
-      new Set(scopedMentors.map((mentor) => mentor.mentor_type || 'Mentor').filter(Boolean))
-    ).sort()
-  }, [scopedMentors])
+    return mentors
+      .filter(
+        (mentor) =>
+          mentor.permission_profile_slug === MENTOR_HOD_SLUG && mentor.id !== editingId,
+      )
+      .map((mentor) => ({ id: mentor.id, name: mentor.full_name }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [mentors, editingId])
 
   const filteredMentors = useMemo(() => {
     const keyword = search.trim().toLowerCase()
@@ -182,80 +267,87 @@ export default function Page() {
     return scopedMentors.filter((mentor) => {
       const matchesSearch =
         !keyword ||
-        mentor.name.toLowerCase().includes(keyword) ||
-        mentor.email?.toLowerCase().includes(keyword) ||
-        mentor.phone?.toLowerCase().includes(keyword) ||
-        mentor.department.toLowerCase().includes(keyword) ||
-        mentor.hod.toLowerCase().includes(keyword) ||
+        mentor.full_name.toLowerCase().includes(keyword) ||
+        mentor.email.toLowerCase().includes(keyword) ||
+        mentor.phone.toLowerCase().includes(keyword) ||
+        mentor.department_name.toLowerCase().includes(keyword) ||
+        mentor.superior_name.toLowerCase().includes(keyword) ||
+        mentor.permission_profile_name.toLowerCase().includes(keyword) ||
         mentor.status.toLowerCase().includes(keyword)
+
+      const matchesDepartment =
+        filterDepartment === 'all' || mentor.department_id === filterDepartment
 
       return (
         matchesSearch &&
-        (filterdepartment === 'all' || mentor.department === filterdepartment) &&
-        (filterHod === 'all' || mentor.hod === filterHod) &&
+        matchesDepartment &&
+        (filterHod === 'all' || mentor.reports_to === filterHod) &&
         (filterStatus === 'all' || mentor.status === filterStatus) &&
-        (filterType === 'all' || mentor.mentor_type === filterType)
+        (filterType === 'all' || mentor.permission_profile_id === filterType)
       )
     })
-  }, [scopedMentors, search, filterdepartment, filterHod, filterStatus, filterType])
+  }, [scopedMentors, search, filterDepartment, filterHod, filterStatus, filterType])
 
-  const activeMentors = filteredMentors.filter((mentor) => mentor.status === 'active')
-  const assignedHodCount = filteredMentors.filter(
-    (mentor) => mentor.hod && mentor.hod !== 'Not assigned'
-  ).length
+  const statCards = useMemo(() => {
+    const cards: SummaryCard[] = [
+      {
+        label: isHodView ? 'Assigned mentors' : 'Total mentors',
+        value: filteredMentors.length,
+        helper: isHodView ? 'Under your HOD scope' : 'In selected branch',
+        icon: 'mentors.svg',
+      },
+    ]
 
-  const totalBatches = filteredMentors.reduce(
-    (total, mentor) => total + Number(mentor.batches || 0),
-    0
-  )
+    mentorTypeProfiles.forEach((profile) => {
+      cards.push({
+        label: profile.name,
+        value: filteredMentors.filter((mentor) => mentor.permission_profile_id === profile.id).length,
+        helper: 'By mentor type',
+        icon: mentorTypeIcon(profile.slug),
+      })
+    })
 
-  const averageRating =
-    filteredMentors.length > 0
-      ? (
-          filteredMentors.reduce((total, mentor) => total + Number(mentor.rating || 0), 0) /
-          filteredMentors.length
-        ).toFixed(1)
-      : '0.0'
+    return cards
+  }, [filteredMentors, isHodView, mentorTypeProfiles])
 
   const resetFilters = () => {
     setSearch('')
-    setFilterdepartment('all')
+    setFilterDepartment('all')
     setFilterHod('all')
     setFilterStatus('all')
     setFilterType('all')
   }
 
   const resetForm = () => {
-    setName('')
-    setEmail('')
-    setPhone('')
-    setdepartment('')
-    setHod(isHodView ? currentUserName || role?.name || '' : '')
-    setMentorType('Mentor')
-    setJoiningDate('')
-    setRating('0')
-    setStatus('active')
+    setForm(createEmptyForm(defaultProfileId, defaultDepartmentId))
     setEditingId(null)
   }
 
   const openCreateModal = () => {
-    resetForm()
+    const empty = createEmptyForm(defaultProfileId, defaultDepartmentId)
+    const defaultProfile = mentorTypeProfiles.find((profile) => profile.id === defaultProfileId)
+    if (isHodView && user?.id && defaultProfile?.slug !== MENTOR_HOD_SLUG) {
+      empty.reports_to = user.id
+    }
+    setForm(empty)
+    setEditingId(null)
     setError('')
     setMessage('')
     setIsModalOpen(true)
   }
 
-  const openEditModal = (mentor: DemoMentor) => {
+  const openEditModal = (mentor: MentorListRow) => {
     setEditingId(mentor.id)
-    setName(mentor.name)
-    setEmail(mentor.email || '')
-    setPhone(mentor.phone || '')
-    setdepartment(mentor.department)
-    setHod(mentor.hod)
-    setMentorType(mentor.mentor_type || 'Mentor')
-    setJoiningDate(mentor.joining_date || '')
-    setRating(mentor.rating || '0')
-    setStatus(mentor.status)
+    setForm({
+      full_name: mentor.full_name,
+      email: mentor.email,
+      phone: mentor.phone === 'Not added' ? '' : mentor.phone,
+      permission_profile_id: mentor.permission_profile_id || defaultProfileId,
+      department_id: mentor.department_id,
+      reports_to: mentor.reports_to,
+      joining_date: mentor.joining_date,
+      status: mentor.status,
+    })
     setError('')
     setMessage('')
     setIsModalOpen(true)
@@ -267,80 +359,110 @@ export default function Page() {
     setError('')
   }
 
-  const handleSubmitMentor = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmitMentor = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    setLoading(true)
+    setLoadingAction(true)
     setError('')
     setMessage('')
 
+    if (!activeBranchId) {
+      setError('Select a branch before saving a mentor.')
+      setLoadingAction(false)
+      return
+    }
+
     if (!editingId && !canCreateMentor) {
       setError('Your current permission cannot create mentors.')
-      setLoading(false)
+      setLoadingAction(false)
       return
     }
 
     if (editingId && !canEditMentor) {
       setError('Your current permission cannot edit mentors.')
-      setLoading(false)
+      setLoadingAction(false)
       return
     }
 
-    if (!name.trim()) {
+    if (!form.full_name.trim()) {
       setError('Please enter mentor name.')
-      setLoading(false)
+      setLoadingAction(false)
       return
     }
 
-    if (!email.trim()) {
+    if (!form.email.trim()) {
       setError('Please enter email address.')
-      setLoading(false)
+      setLoadingAction(false)
       return
     }
 
-    if (!department.trim()) {
-      setError('Please enter department.')
-      setLoading(false)
+    if (!form.department_id) {
+      setError('Please select a department.')
+      setLoadingAction(false)
       return
     }
 
-    if (!hod.trim()) {
-      setError('Please enter or assign HOD.')
-      setLoading(false)
+    if (!form.permission_profile_id) {
+      setError('Please select a mentor type.')
+      setLoadingAction(false)
       return
     }
 
-    const cleanMentor: DemoMentor = {
-      id: editingId || `mentor-${Date.now()}`,
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      phone: phone.trim() || 'Not added',
-      department: department.trim(),
-      hod: hod.trim(),
-      mentor_type: mentorType,
-      joining_date: joiningDate || new Date().toISOString().split('T')[0],
-      batches: editingId
-        ? mentors.find((mentor) => mentor.id === editingId)?.batches || 0
-        : 0,
-      rating: rating || '0',
-      status,
+    const token = await getAccessToken()
+    if (!token) {
+      setError('Session expired. Please login again.')
+      setLoadingAction(false)
+      return
+    }
+
+    const submitForm: MentorFormInput = {
+      ...form,
+      reports_to: isSelectedHodType ? null : form.reports_to,
     }
 
     if (editingId) {
-      setMentors(
-        mentors.map((mentor) => (mentor.id === editingId ? cleanMentor : mentor))
-      )
-      setMessage('Mentor updated successfully in demo.')
-    } else {
-      setMentors([cleanMentor, ...mentors])
-      setMessage('Mentor created successfully in demo.')
+      const result = await updateMentorRecord(editingId, submitForm, activeBranchId, token)
+      if (!result.ok) {
+        setError(result.error)
+        setLoadingAction(false)
+        return
+      }
+
+      setMessage('Mentor updated successfully.')
+      await reload()
+      setLoadingAction(false)
+      setIsModalOpen(false)
+      resetForm()
+      return
     }
 
-    setLoading(false)
+    const result = await createMentorAccount(
+      {
+        ...submitForm,
+        branch_id: activeBranchId,
+      },
+      token,
+    )
+
+    if (!result.ok) {
+      setError(result.error)
+      setLoadingAction(false)
+      return
+    }
+
+    setCreatedCredentials({
+      fullName: form.full_name.trim(),
+      email: result.email,
+      password: result.temporaryPassword,
+    })
+    setCopyNotice('')
+    setMessage('Mentor created successfully.')
+    await reload()
+    setLoadingAction(false)
     setIsModalOpen(false)
     resetForm()
   }
 
-  const deleteMentor = (mentorId: string) => {
+  const deleteMentor = async (mentorId: string) => {
     setError('')
     setMessage('')
 
@@ -349,8 +471,20 @@ export default function Page() {
       return
     }
 
-    setMentors(mentors.filter((mentor) => mentor.id !== mentorId))
-    setMessage('Mentor deleted from demo.')
+    const token = await getAccessToken()
+    if (!token) {
+      setError('Session expired. Please login again.')
+      return
+    }
+
+    const result = await deleteMentorAccount(mentorId, token)
+    if (!result.ok) {
+      setError(result.error)
+      return
+    }
+
+    setMessage('Mentor deleted successfully.')
+    await reload()
   }
 
   const exportMentors = () => {
@@ -362,7 +496,7 @@ export default function Page() {
       return
     }
 
-    setMessage('Demo export triggered. Later this will download mentor report from Supabase.')
+    setMessage('Export will be available in a later phase.')
   }
 
   if (!can('mentors.view')) {
@@ -387,15 +521,17 @@ export default function Page() {
               <p className="mt-3 max-w-4xl text-muted-foreground">
                 {isHodView
                   ? 'View mentors assigned under your HOD scope.'
-                  : 'Manage mentor profiles, department, HOD assignment, batch load and student rating.'}
+                  : `Manage branch mentors for ${activeBranch?.name || 'the selected branch'}.`}
               </p>
             </div>
 
             <div className="flex flex-wrap gap-3">
-
-
               {canManageMentors && (
-                <Button onClick={openCreateModal} className="bg-[#6ee75a] text-black hover:bg-[#5dd84a]">
+                <Button
+                  onClick={openCreateModal}
+                  disabled={!activeBranchId || loading}
+                  className="bg-[#6ee75a] text-black hover:bg-[#5dd84a]"
+                >
                   <CustomIcon icon="patch.svg" folder={iconFolder} alt="Create" className="mr-2 h-4 w-4" />
                   Create Mentor
                 </Button>
@@ -405,9 +541,9 @@ export default function Page() {
         </CardContent>
       </Card>
 
-      {error && (
+      {(error || loadError) && (
         <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-          {error}
+          {error || loadError}
         </div>
       )}
 
@@ -417,42 +553,16 @@ export default function Page() {
         </div>
       )}
 
+      {!activeBranchId && !loading && (
+        <div className="border border-border bg-transparent px-4 py-3 text-sm text-muted-foreground">
+          Select a branch from the header to view branch mentors.
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="border border-border bg-transparent">
-          <CardContent className="p-6">
-            <p className="text-sm uppercase text-muted-foreground">
-              {isHodView ? 'Assigned mentors' : 'mentors'}
-            </p>
-            <p className="mt-3 text-4xl font-bold">{filteredMentors.length}</p>
-            <p className="mt-4 text-sm text-muted-foreground">
-              {isHodView ? 'Under your HOD scope' : 'Filtered mentors'}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className="border border-border bg-transparent">
-          <CardContent className="p-6">
-            <p className="text-sm uppercase text-muted-foreground">Assigned HOD</p>
-            <p className="mt-3 text-4xl font-bold">{assignedHodCount}</p>
-            <p className="mt-4 text-sm text-muted-foreground">Superior mentor mapping</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border border-border bg-transparent">
-          <CardContent className="p-6">
-            <p className="text-sm uppercase text-muted-foreground">Avg Rating</p>
-            <p className="mt-3 text-4xl font-bold">{averageRating}</p>
-            <p className="mt-4 text-sm text-muted-foreground">Student feedback</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border border-border bg-transparent">
-          <CardContent className="p-6">
-            <p className="text-sm uppercase text-muted-foreground">Batches</p>
-            <p className="mt-3 text-4xl font-bold">{totalBatches}</p>
-            <p className="mt-4 text-sm text-muted-foreground">Total handled</p>
-          </CardContent>
-        </Card>
+        {statCards.map((card) => (
+          <StatCard key={card.label} card={card} iconFolder={iconFolder} />
+        ))}
       </div>
 
       <Card className="border border-border bg-transparent">
@@ -466,7 +576,13 @@ export default function Page() {
         </CardHeader>
 
         <CardContent>
-          <div className={isHodView ? 'grid gap-3 md:grid-cols-2 xl:grid-cols-4' : 'grid gap-3 md:grid-cols-2 xl:grid-cols-5'}>
+          <div
+            className={
+              isHodView
+                ? 'grid gap-3 md:grid-cols-2 xl:grid-cols-4'
+                : 'grid gap-3 md:grid-cols-2 xl:grid-cols-5'
+            }
+          >
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -475,14 +591,16 @@ export default function Page() {
             />
 
             <select
-              value={filterdepartment}
-              onChange={(event) => setFilterdepartment(event.target.value)}
+              value={filterDepartment}
+              onChange={(event) => setFilterDepartment(event.target.value)}
               className={selectClass}
             >
-              <option value="all" className={optionClass}>All departments</option>
+              <option value="all" className={optionClass}>
+                All departments
+              </option>
               {departmentOptions.map((item) => (
-                <option key={item} value={item} className={optionClass}>
-                  {item}
+                <option key={item.id} value={item.id} className={optionClass}>
+                  {item.name}
                 </option>
               ))}
             </select>
@@ -493,10 +611,12 @@ export default function Page() {
                 onChange={(event) => setFilterHod(event.target.value)}
                 className={selectClass}
               >
-                <option value="all" className={optionClass}>All HOD</option>
+                <option value="all" className={optionClass}>
+                  All HOD
+                </option>
                 {hodOptions.map((item) => (
-                  <option key={item} value={item} className={optionClass}>
-                    {item}
+                  <option key={item.id} value={item.id} className={optionClass}>
+                    {item.name}
                   </option>
                 ))}
               </select>
@@ -507,10 +627,12 @@ export default function Page() {
               onChange={(event) => setFilterType(event.target.value)}
               className={selectClass}
             >
-              <option value="all" className={optionClass}>All Types</option>
-              {mentorTypeOptions.map((item) => (
-                <option key={item} value={item} className={optionClass}>
-                  {item}
+              <option value="all" className={optionClass}>
+                All types
+              </option>
+              {mentorTypeProfiles.map((item) => (
+                <option key={item.id} value={item.id} className={optionClass}>
+                  {item.name}
                 </option>
               ))}
             </select>
@@ -520,35 +642,53 @@ export default function Page() {
               onChange={(event) => setFilterStatus(event.target.value)}
               className={selectClass}
             >
-              <option value="all" className={optionClass}>All Status</option>
-              <option value="active" className={optionClass}>Active</option>
-              <option value="inactive" className={optionClass}>Inactive</option>
+              <option value="all" className={optionClass}>
+                All Status
+              </option>
+              <option value="active" className={optionClass}>
+                Active
+              </option>
+              <option value="inactive" className={optionClass}>
+                Inactive
+              </option>
             </select>
           </div>
         </CardContent>
       </Card>
 
+      {activeBranchId && !loading && departmentOptions.length === 0 && (
+        <div className="border border-border bg-transparent px-4 py-3 text-sm text-muted-foreground">
+          No departments found for this branch. Add departments under Departments first, then assign them to mentors.
+        </div>
+      )}
+
       <Card className="border border-border bg-transparent">
         <CardHeader>
-          <CardTitle>{isHodView ? 'Assigned Mentor Directory' : 'Mentor Directory'}</CardTitle>
+          <CardTitle>
+            {isHodView ? 'Assigned Mentor Directory' : 'Mentor Directory'}
+          </CardTitle>
         </CardHeader>
 
         <CardContent>
-          {filteredMentors.length === 0 ? (
+          {loading ? (
+            <div className="border border-border bg-transparent p-6 text-sm text-muted-foreground">
+              Loading mentors...
+            </div>
+          ) : filteredMentors.length === 0 ? (
             <div className="border border-border bg-transparent p-6 text-sm text-muted-foreground">
               {isHodView
-                ? 'No mentors are assigned under your HOD scope in demo data.'
-                : 'No mentors found.'}
+                ? 'No mentors are assigned under your HOD scope.'
+                : 'No mentors found for this branch.'}
             </div>
           ) : (
             <div className="w-full overflow-x-auto">
               <table className="w-full min-w-[980px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-border text-left">
-                    <th className="px-4 py-3 font-semibold">mentor</th>
-                    <th className="px-4 py-3 font-semibold">department</th>
+                    <th className="px-4 py-3 font-semibold">Mentor</th>
+                    <th className="px-4 py-3 font-semibold">Type</th>
+                    <th className="px-4 py-3 font-semibold">Department</th>
                     <th className="px-4 py-3 font-semibold">HOD</th>
-                    <th className="px-4 py-3 font-semibold">Batches</th>
                     <th className="px-4 py-3 font-semibold">Rating</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 text-right font-semibold">Actions</th>
@@ -560,32 +700,35 @@ export default function Page() {
                     <tr key={mentor.id} className="border-b border-border">
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
-                        
-                           <div className="flex h-10 w-10 items-center justify-center overflow-hidden border border-border bg-background">
-                                                      <Image
-                                                        src={'/avatar.svg'}
-                                                        alt={mentor.name}
-                                                        width={40}
-                                                        height={40}
-                                                        className="h-full w-full object-cover"
-                                                      />
-                                                    </div>
+                          <div className="flex h-10 w-10 items-center justify-center overflow-hidden border border-border bg-background">
+                            <Image
+                              src={mentor.avatar_url || '/avatar.svg'}
+                              alt={mentor.full_name}
+                              width={40}
+                              height={40}
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
 
                           <div>
-                            <p className="font-semibold">{mentor.name}</p>
+                            <p className="font-semibold">{mentor.full_name}</p>
                             <p className="text-xs text-muted-foreground">{mentor.email}</p>
                           </div>
                         </div>
                       </td>
 
-                      <td className="px-4 py-4 text-muted-foreground">{mentor.department}</td>
-                      <td className="px-4 py-4 text-muted-foreground">{mentor.hod}</td>
-                      <td className="px-4 py-4">{mentor.batches}</td>
-                      <td className="px-4 py-4">{mentor.rating}</td>
+                      <td className="px-4 py-4 text-muted-foreground">
+                        {mentor.permission_profile_name}
+                      </td>
+                      <td className="px-4 py-4 text-muted-foreground">{mentor.department_name}</td>
+                      <td className="px-4 py-4 text-muted-foreground">
+                        {mentor.permission_profile_slug === MENTOR_HOD_SLUG
+                          ? '—'
+                          : mentor.superior_name}
+                      </td>
+                      <td className="px-4 py-4">{mentor.average_rating}</td>
                       <td className="px-4 py-4">
-                        <span className={getStatusClass(mentor.status)}>
-                          {mentor.status}
-                        </span>
+                        <span className={getStatusClass(mentor.status)}>{mentor.status}</span>
                       </td>
 
                       <td className="px-4 py-4">
@@ -595,11 +738,7 @@ export default function Page() {
                           </Button>
 
                           {canEditMentor && (
-                            <Button
-                              type="button"
-                              size="sm"
-                              onClick={() => openEditModal(mentor)}
-                            >
+                            <Button type="button" size="sm" onClick={() => openEditModal(mentor)}>
                               Edit
                             </Button>
                           )}
@@ -609,7 +748,7 @@ export default function Page() {
                               type="button"
                               variant="outline"
                               size="sm"
-                              onClick={() => deleteMentor(mentor.id)}
+                              onClick={() => void deleteMentor(mentor.id)}
                             >
                               Delete
                             </Button>
@@ -634,7 +773,7 @@ export default function Page() {
                   {editingId ? 'Edit Mentor' : 'Create Mentor'}
                 </h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Add mentor profile, department, HOD assignment and basic contact details.
+                  Add mentor profile, department, HOD assignment and contact details.
                 </p>
               </div>
 
@@ -652,8 +791,8 @@ export default function Page() {
                 <div>
                   <label className="mb-2 block text-sm font-medium">Full Name</label>
                   <input
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
+                    value={form.full_name}
+                    onChange={(event) => setForm({ ...form, full_name: event.target.value })}
                     className={inputClass}
                     placeholder="Enter mentor name"
                     required
@@ -664,19 +803,20 @@ export default function Page() {
                   <label className="mb-2 block text-sm font-medium">Email</label>
                   <input
                     type="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
+                    value={form.email}
+                    onChange={(event) => setForm({ ...form, email: event.target.value })}
                     className={inputClass}
-                    placeholder="mentor@pixlpluzportal.demo"
+                    placeholder="mentor@pixlpluzportal.com"
                     required
+                    readOnly={Boolean(editingId)}
                   />
                 </div>
 
                 <div>
                   <label className="mb-2 block text-sm font-medium">Phone</label>
                   <input
-                    value={phone}
-                    onChange={(event) => setPhone(event.target.value)}
+                    value={form.phone}
+                    onChange={(event) => setForm({ ...form, phone: event.target.value })}
                     className={inputClass}
                     placeholder="Phone number"
                   />
@@ -685,69 +825,97 @@ export default function Page() {
                 <div>
                   <label className="mb-2 block text-sm font-medium">Mentor Type</label>
                   <select
-                    value={mentorType}
-                    onChange={(event) => setMentorType(event.target.value)}
+                    value={form.permission_profile_id}
+                    onChange={(event) => {
+                      const nextProfileId = event.target.value
+                      const nextProfile = mentorTypeProfiles.find(
+                        (profile) => profile.id === nextProfileId,
+                      )
+                      setForm({
+                        ...form,
+                        permission_profile_id: nextProfileId,
+                        reports_to:
+                          nextProfile?.slug === MENTOR_HOD_SLUG ? null : form.reports_to,
+                      })
+                    }}
                     className={selectClass}
+                    required
                   >
-                    <option value="Mentor" className={optionClass}>Mentor</option>
-                    <option value="Senior Mentor" className={optionClass}>Senior Mentor</option>
-                    <option value="Practical Trainer" className={optionClass}>Practical Trainer</option>
-                    <option value="Guest Mentor" className={optionClass}>Guest Mentor</option>
+                    {mentorTypeProfiles.map((item) => (
+                      <option key={item.id} value={item.id} className={optionClass}>
+                        {item.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium">department</label>
-                  <input
-                    value={department}
-                    onChange={(event) => setdepartment(event.target.value)}
-                    className={inputClass}
-                    placeholder="Example: Digital Marketing"
+                  <label className="mb-2 block text-sm font-medium">Department</label>
+                  <select
+                    value={form.department_id}
+                    onChange={(event) => setForm({ ...form, department_id: event.target.value })}
+                    className={selectClass}
                     required
-                  />
+                  >
+                    {departmentOptions.map((item) => (
+                      <option key={item.id} value={item.id} className={optionClass}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
-                <div>
-                  <label className="mb-2 block text-sm font-medium">Assign HOD</label>
-                  <input
-                    value={hod}
-                    onChange={(event) => setHod(event.target.value)}
-                    className={inputClass}
-                    placeholder="Example: Superior Mentor"
-                    readOnly={isHodView}
-                    required
-                  />
-                </div>
+                {!isSelectedHodType && (
+                  <div>
+                    <label className="mb-2 block text-sm font-medium">Assign HOD</label>
+                    <select
+                      value={form.reports_to || ''}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          reports_to: event.target.value || null,
+                        })
+                      }
+                      className={selectClass}
+                      disabled={isHodView && !editingId}
+                    >
+                      <option value="" className={optionClass}>
+                        Not assigned
+                      </option>
+                      {hodOptions.map((item) => (
+                        <option key={item.id} value={item.id} className={optionClass}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label className="mb-2 block text-sm font-medium">Date of Joining</label>
                   <input
                     type="date"
-                    value={joiningDate}
-                    onChange={(event) => setJoiningDate(event.target.value)}
+                    value={form.joining_date}
+                    onChange={(event) => setForm({ ...form, joining_date: event.target.value })}
                     className={inputClass}
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium">Rating</label>
-                  <input
-                    value={rating}
-                    onChange={(event) => setRating(event.target.value)}
-                    className={inputClass}
-                    placeholder="Example: 4.7"
                   />
                 </div>
 
                 <div className="md:col-span-2">
                   <label className="mb-2 block text-sm font-medium">Status</label>
                   <select
-                    value={status}
-                    onChange={(event) => setStatus(event.target.value as MentorStatus)}
+                    value={form.status}
+                    onChange={(event) =>
+                      setForm({ ...form, status: event.target.value as MentorUiStatus })
+                    }
                     className={selectClass}
                   >
-                    <option value="active" className={optionClass}>Active</option>
-                    <option value="inactive" className={optionClass}>Inactive</option>
+                    <option value="active" className={optionClass}>
+                      Active
+                    </option>
+                    <option value="inactive" className={optionClass}>
+                      Inactive
+                    </option>
                   </select>
                 </div>
               </div>
@@ -763,14 +931,128 @@ export default function Page() {
                   Cancel
                 </Button>
 
-                <Button type="submit" disabled={loading}>
-                  {loading ? 'Saving...' : editingId ? 'Update Mentor' : 'Create Mentor'}
+                <Button type="submit" disabled={loadingAction}>
+                  {loadingAction ? 'Saving...' : editingId ? 'Update Mentor' : 'Create Mentor'}
                 </Button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      <Dialog
+        open={Boolean(createdCredentials)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCreatedCredentials(null)
+            setCopyNotice('')
+          }
+        }}
+      >
+        <DialogContent className="border border-border bg-card sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mentor Created</DialogTitle>
+            <DialogDescription>
+              Login credentials for the new mentor. Copy and share them securely.
+            </DialogDescription>
+          </DialogHeader>
+
+          {createdCredentials && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <span className="text-sm font-semibold">Name</span>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={createdCredentials.fullName}
+                    className="h-10 min-w-0 flex-1 border border-border bg-background px-3 text-sm outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void copyCredential('Name', createdCredentials.fullName, setCopyNotice)
+                    }
+                    className="shrink-0 border border-border px-3 text-sm font-semibold hover:bg-accent"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className="text-sm font-semibold">Email</span>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={createdCredentials.email}
+                    className="h-10 min-w-0 flex-1 border border-border bg-background px-3 text-sm outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void copyCredential('Email', createdCredentials.email, setCopyNotice)
+                    }
+                    className="shrink-0 border border-border px-3 text-sm font-semibold hover:bg-accent"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className="text-sm font-semibold">Password</span>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={createdCredentials.password}
+                    className="h-10 min-w-0 flex-1 border border-border bg-background px-3 text-sm font-semibold text-[#153e90] outline-none dark:text-[#6ee75a]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void copyCredential('Password', createdCredentials.password, setCopyNotice)
+                    }
+                    className="shrink-0 border border-border px-3 text-sm font-semibold hover:bg-accent"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              {copyNotice && (
+                <p className="text-sm font-semibold text-[#153e90] dark:text-[#6ee75a]">{copyNotice}</p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:justify-between">
+            <button
+              type="button"
+              onClick={async () => {
+                if (!createdCredentials) return
+                await copyCredential(
+                  'Login credentials',
+                  formatCredentialsText(createdCredentials),
+                  setCopyNotice,
+                )
+              }}
+              className="inline-flex items-center justify-center border border-border px-4 py-2 text-sm font-semibold hover:bg-accent"
+            >
+              Copy All
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatedCredentials(null)
+                setCopyNotice('')
+              }}
+              className="inline-flex items-center justify-center bg-[#153e90] px-4 py-2 text-sm font-semibold text-white dark:bg-[#6ee75a] dark:text-black"
+            >
+              Done
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useAuth } from '@/lib/auth/provider'
 import {
   fetchBranchControllerOptions,
   fetchBranchList,
@@ -40,6 +41,7 @@ export function useBranchList() {
 }
 
 export function useBranchNav() {
+  const { sessionState, user } = useAuth()
   const [branches, setBranches] = useState<BranchNavItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -62,8 +64,9 @@ export function useBranchNav() {
   }, [])
 
   useEffect(() => {
+    if (sessionState === 'loading') return
     void reload()
-  }, [reload])
+  }, [reload, sessionState, user?.id])
 
   return { branches, loading, error, reload }
 }

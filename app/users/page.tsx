@@ -2,22 +2,53 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
-import { useDemoAuth } from '@/lib/demo/auth'
-import { companies, demoModules } from '@/lib/demo/seed'
-import type { DemoUser } from '@/lib/demo/types'
+import { useUsersData } from '@/lib/data/hooks/use-users'
+import {
+  canManageDirectoryUser,
+  createUserAccount,
+  deleteUserAccount,
+  getAccessScope,
+  isSuperAdminUserRow,
+  sortUsersByParentRoleHierarchy,
+  canViewDirectoryUser,
+  updateUserProfile,
+  updateUserStatus,
+  type UserFormInput,
+  type UserListRow,
+} from '@/lib/data/users'
+import { useAuth } from '@/lib/auth/provider'
+import { createClient } from '@/lib/supabase/client'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
-const parentRoles = [
-  { id: 'superadmin', name: 'Super Admin' },
-  { id: 'admin', name: 'Admin' },
-  { id: 'branch-controller', name: 'Branch Admin' },
-  { id: 'hod', name: 'HOD ' },
-  { id: 'mentor', name: 'Mentor' },
-  { id: 'student', name: 'Student' },
-  { id: 'final-qa', name: 'Final QA' },
-  { id: 'placement', name: 'Placement Cell' },
-]
+type CreatedCredentials = {
+  fullName: string
+  email: string
+  password: string
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function formatCredentialsText(credentials: CreatedCredentials) {
+  return `Name: ${credentials.fullName}\nEmail: ${credentials.email}\nPassword: ${credentials.password}`
+}
 
 function CustomIcon({
   icon,
@@ -44,113 +75,155 @@ function CustomIcon({
   )
 }
 
-function createEmptyUser(): DemoUser {
+function createEmptyForm(
+  activeBranchId: string | null,
+  defaultProfileId: string,
+): UserFormInput & { id: string | null } {
   return {
-    id: `u-${Date.now()}`,
-    fullName: '',
+    id: null,
+    full_name: '',
     email: '',
-    password: 'demo123',
-    roleId: 'student',
-    companyId: 'c1',
-    branchId: 'b1',
+    permission_profile_id: defaultProfileId,
+    branch_id: activeBranchId,
     status: 'active',
   }
 }
 
+async function getAccessToken() {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token || ''
+}
+
 export default function Page() {
-  const { users, roles, updateUsers, user, role, can } = useDemoAuth()
-  const { activeBranchId, allowedBranches } = useBranchScope()
+  const searchParams = useSearchParams()
+  const { user, role, can, refreshSession, parentRoleId } = useAuth()
+  const { activeBranchId, allowedBranches, hasAllBranchAccess } = useBranchScope()
+  const {
+    users,
+    permissionProfiles,
+    allPermissionProfiles,
+    parentRoles,
+    activeBranch,
+    loading,
+    error,
+    reload,
+  } = useUsersData()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
 
-  const [formUser, setFormUser] = useState<DemoUser>(() => createEmptyUser())
+  const defaultProfileId = permissionProfiles[0]?.id || ''
+
+  const [formUser, setFormUser] = useState(() => createEmptyForm(activeBranchId, ''))
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
-  const [selectedUserId, setSelectedUserId] = useState(users[0]?.id || '')
+  const [selectedUserId, setSelectedUserId] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [roleFilter, setRoleFilter] = useState('all')
   const [branchFilter, setBranchFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [notice, setNotice] = useState('')
+  const [createdCredentials, setCreatedCredentials] = useState<CreatedCredentials | null>(null)
+  const [copyNotice, setCopyNotice] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  // useEffect(() => {
+  //   if (activeBranchId) {
+  //     setBranchFilter(activeBranchId)
+  //   }
+  // }, [activeBranchId])
 
   useEffect(() => {
-    if (activeBranchId) {
-      setBranchFilter(activeBranchId)
+    const editId = searchParams.get('edit')
+    if (!editId || loading || !users.length) return
+
+    const item = users.find((row) => row.id === editId)
+    if (!item || !canManageDirectoryUser(item, parentRoleId) || !canViewDirectoryUser(item, parentRoleId)) return
+    if (editingUserId === editId) return
+
+    setFormUser({
+      id: item.id,
+      full_name: item.full_name,
+      email: item.email,
+      permission_profile_id: item.permission_profile_id || defaultProfileId,
+      branch_id: item.branch_id,
+      status: item.status,
+    })
+    setEditingUserId(item.id)
+    setSelectedUserId(item.id)
+  }, [defaultProfileId, editingUserId, loading, parentRoleId, searchParams, users])
+
+  useEffect(() => {
+    if (!editingUserId && defaultProfileId) {
+      setFormUser((prev) =>
+        prev.id
+          ? prev
+          : createEmptyForm(activeBranchId, defaultProfileId),
+      )
     }
-  }, [activeBranchId])
-
-  const selectedUser = useMemo(() => {
-    return users.find((item) => item.id === selectedUserId) || users[0]
-  }, [selectedUserId, users])
-
-  const selectedUserRole = useMemo(() => {
-    return roles.find((item) => item.id === selectedUser?.roleId)
-  }, [roles, selectedUser])
+  }, [activeBranchId, defaultProfileId, editingUserId])
 
   const activeUsers = users.filter((item) => item.status === 'active')
-  const customRoles = roles.filter((item) => !parentRoles.some((parent) => parent.id === item.id))
+  const customProfileCount = allPermissionProfiles.filter((item) => !item.is_system).length
+  const systemProfileCount = allPermissionProfiles.filter((item) => item.is_system).length
 
   const filteredUsers = useMemo(() => {
     return users.filter((item) => {
       const term = searchTerm.trim().toLowerCase()
       const matchesSearch =
         !term ||
-        item.fullName.toLowerCase().includes(term) ||
+        item.full_name.toLowerCase().includes(term) ||
         item.email.toLowerCase().includes(term) ||
-        item.roleId.toLowerCase().includes(term)
+        item.permission_profile_name.toLowerCase().includes(term)
 
-      const matchesRole = roleFilter === 'all' || item.roleId === roleFilter
+      const matchesRole =
+        roleFilter === 'all' || item.permission_profile_id === roleFilter
       const matchesBranch =
         branchFilter === 'all' ||
-        item.branchId === branchFilter ||
-        item.branchId === 'all'
+        item.branch_id === branchFilter ||
+        item.branch_ids.includes(branchFilter)
       const matchesStatus = statusFilter === 'all' || item.status === statusFilter
 
       return matchesSearch && matchesRole && matchesBranch && matchesStatus
     })
   }, [users, searchTerm, roleFilter, branchFilter, statusFilter])
 
-  const getRoleName = (roleId?: string) => {
-    return roles.find((item) => item.id === roleId)?.name || 'Not assigned'
+  const directoryUsers = useMemo(
+    () => sortUsersByParentRoleHierarchy(filteredUsers, parentRoles),
+    [filteredUsers, parentRoles],
+  )
+
+  const getProfileName = (profileId?: string | null) => {
+    if (!profileId) return 'Not assigned'
+    return permissionProfiles.find((item) => item.id === profileId)?.name || 'Not assigned'
   }
 
-  const getParentRoleName = (roleId?: string) => {
-    const currentRole = roles.find((item) => item.id === roleId)
-    const parentRoleId = currentRole?.parentRoleId || currentRole?.id || roleId
-    return parentRoles.find((item) => item.id === parentRoleId)?.name || 'Not assigned'
+  const getParentRoleName = (parentRoleId?: string) => {
+    if (!parentRoleId) return 'Not assigned'
+    return parentRoles.find((item) => item.id === parentRoleId)?.name || parentRoleId
   }
 
-  const getCompanyName = (companyId?: string) => {
-    if (!companyId || companyId === 'all') return 'All Companies'
-    return companies.find((item) => item.id === companyId)?.name || companyId
-  }
-
-  const getBranchName = (branchId?: string) => {
-    if (!branchId || branchId === 'all') return 'All Branches'
+  const getBranchName = (branchId?: string | null) => {
+    if (!branchId) return 'All Branches'
     return allowedBranches.find((item) => item.id === branchId)?.name || branchId
   }
 
-  const getAccessScope = (item: DemoUser) => {
-    if (item.roleId === 'superadmin') return 'Full system access'
-    if (item.branchId === 'all') return 'Company level access'
-    if (item.roleId === 'student') return 'Own student data only'
-    if (item.roleId === 'mentor') return 'Assigned batches only'
-    return 'Assigned branch access'
-  }
-
-  const getVisibleModules = (roleId?: string) => {
-    const currentRole = roles.find((item) => item.id === roleId)
-
-    if (!currentRole) return []
-
-    return demoModules.filter((module) => currentRole.enabledModules.includes(module.id))
-  }
-
   const resetForm = () => {
-    setFormUser(createEmptyUser())
+    setFormUser(createEmptyForm(activeBranchId, defaultProfileId))
     setEditingUserId(null)
   }
 
-  const saveUser = () => {
+  const copyCredential = async (label: string, text: string) => {
+    const copied = await copyToClipboard(text)
+    setCopyNotice(copied ? `${label} copied.` : `Could not copy ${label.toLowerCase()}.`)
+    window.setTimeout(() => setCopyNotice(''), 2000)
+  }
+
+  const copyAllCredentials = async () => {
+    if (!createdCredentials) return
+    await copyCredential('Login credentials', formatCredentialsText(createdCredentials))
+  }
+
+  const saveUser = async () => {
     if (!can('users.create') && !editingUserId) {
       setNotice('Your current role cannot create users.')
       return
@@ -161,7 +234,7 @@ export default function Page() {
       return
     }
 
-    if (!formUser.fullName.trim()) {
+    if (!formUser.full_name.trim()) {
       setNotice('Please enter full name.')
       return
     }
@@ -171,75 +244,180 @@ export default function Page() {
       return
     }
 
-    const cleanUser: DemoUser = {
-      ...formUser,
-      fullName: formUser.fullName.trim(),
-      email: formUser.email.trim().toLowerCase(),
-      password: formUser.password || 'demo123',
-      companyId: formUser.companyId || 'c1',
-      branchId: formUser.branchId || 'b1',
+    if (!formUser.permission_profile_id) {
+      setNotice('Please select a permission profile.')
+      return
     }
 
-    const exists = users.some((item) => item.id === cleanUser.id)
+    const resolvedBranchId = hasAllBranchAccess
+      ? formUser.branch_id
+      : formUser.branch_id ?? activeBranchId ?? null
 
-    if (exists) {
-      updateUsers(users.map((item) => (item.id === cleanUser.id ? cleanUser : item)))
-      setNotice('User updated successfully in demo.')
-    } else {
-      updateUsers([cleanUser, ...users])
-      setNotice('User created successfully in demo.')
+    if (!hasAllBranchAccess && !resolvedBranchId) {
+      setNotice('Please select a branch.')
+      return
     }
 
-    setSelectedUserId(cleanUser.id)
-    resetForm()
+    setSaving(true)
+    setNotice('')
+
+    try {
+      const payload: UserFormInput = {
+        full_name: formUser.full_name.trim(),
+        email: formUser.email.trim().toLowerCase(),
+        permission_profile_id: formUser.permission_profile_id,
+        branch_id: resolvedBranchId,
+        status: formUser.status,
+      }
+
+      if (editingUserId) {
+        const result = await updateUserProfile(editingUserId, payload)
+        if (!result.ok) {
+          setNotice(result.error)
+          return
+        }
+        setNotice('User updated successfully.')
+        setSelectedUserId(editingUserId)
+        resetForm()
+        await reload()
+        await refreshSession()
+        return
+      }
+
+      const token = await getAccessToken()
+      if (!token) {
+        setNotice('Session expired. Please login again.')
+        return
+      }
+
+      const result = await createUserAccount(
+        {
+          ...payload,
+          password: '',
+        },
+        token,
+      )
+
+      if (!result.ok) {
+        setNotice(result.error)
+        return
+      }
+
+      setCreatedCredentials({
+        fullName: payload.full_name,
+        email: result.email,
+        password: result.temporaryPassword,
+      })
+      setNotice('User created successfully.')
+      setSelectedUserId(result.userId)
+      if (payload.branch_id) {
+        setBranchFilter(payload.branch_id)
+      } else {
+        setBranchFilter('all')
+      }
+      resetForm()
+      await reload()
+      await refreshSession()
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const editUser = (item: DemoUser) => {
-    setFormUser({ ...item })
+  const editUser = (item: UserListRow) => {
+    if (!canManageDirectoryUser(item, parentRoleId)) {
+      setNotice('Only Super Admin can edit Super Admin users.')
+      return
+    }
+
+    setFormUser({
+      id: item.id,
+      full_name: item.full_name,
+      email: item.email,
+      permission_profile_id: item.permission_profile_id || defaultProfileId,
+      branch_id: item.branch_id,
+      status: item.status,
+    })
     setEditingUserId(item.id)
     setSelectedUserId(item.id)
-    setNotice(`Editing ${item.fullName}.`)
+    setNotice(`Editing ${item.full_name}.`)
   }
 
-  const deleteUser = (userId: string) => {
+  const deleteUser = async (userId: string) => {
     if (!can('users.delete')) {
       setNotice('Your current role cannot delete users.')
       return
     }
 
-    if (userId === user?.id) {
-      setNotice('You cannot delete the currently logged in demo user.')
+    const targetUser = users.find((item) => item.id === userId)
+    if (targetUser && !canManageDirectoryUser(targetUser, parentRoleId)) {
+      setNotice('Only Super Admin can delete Super Admin users.')
       return
     }
 
-    updateUsers(users.filter((item) => item.id !== userId))
-
-    if (selectedUserId === userId) {
-      setSelectedUserId(users.find((item) => item.id !== userId)?.id || '')
+    if (userId === user?.id) {
+      setNotice('You cannot delete the currently logged in user.')
+      return
     }
 
-    setNotice('User deleted from demo state.')
+    setSaving(true)
+    setNotice('')
+
+    try {
+      const token = await getAccessToken()
+      if (!token) {
+        setNotice('Session expired. Please login again.')
+        return
+      }
+
+      const result = await deleteUserAccount(userId, token)
+      if (!result.ok) {
+        setNotice(result.error)
+        return
+      }
+
+      if (selectedUserId === userId) {
+        setSelectedUserId(users.find((item) => item.id !== userId)?.id || '')
+      }
+
+      if (editingUserId === userId) {
+        resetForm()
+      }
+
+      setNotice('User deleted successfully.')
+      await reload()
+      await refreshSession()
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const toggleUserStatus = (item: DemoUser) => {
+  const toggleUserStatus = async (item: UserListRow) => {
     if (!can('users.edit')) {
       setNotice('Your current role cannot enable or disable users.')
       return
     }
 
-    const nextStatus = item.status === 'active' ? 'inactive' : 'active'
-    updateUsers(users.map((userItem) => (userItem.id === item.id ? { ...userItem, status: nextStatus } : userItem)))
-    setNotice(`${item.fullName} is now ${nextStatus}.`)
-  }
-
-  const assignRole = (item: DemoUser, roleId: string) => {
-    if (!can('users.assign')) {
-      setNotice('Your current role cannot assign roles.')
+    if (!canManageDirectoryUser(item, parentRoleId)) {
+      setNotice('Only Super Admin can change Super Admin user status.')
       return
     }
 
-    updateUsers(users.map((userItem) => (userItem.id === item.id ? { ...userItem, roleId } : userItem)))
-    setNotice(`Role assigned to ${item.fullName}.`)
+    const nextStatus = item.status === 'active' ? 'inactive' : 'active'
+    setSaving(true)
+    setNotice('')
+
+    try {
+      const result = await updateUserStatus(item.id, nextStatus)
+      if (!result.ok) {
+        setNotice(result.error)
+        return
+      }
+
+      setNotice(`${item.full_name} is now ${nextStatus}.`)
+      await reload()
+    } finally {
+      setSaving(false)
+    }
   }
 
   if (!can('users.view')) {
@@ -259,13 +437,18 @@ export default function Page() {
           <p className="text-sm font-semibold text-[#153e90] dark:text-[#6ee75a]">Permission controlled module</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight">Users</h1>
           <p className="mt-2 max-w-4xl text-muted-foreground">
-            Create demo users, assign parent based custom roles, control company and branch scope, and check which modules each user can access before connecting Supabase.
+            Create portal users, assign permission profiles, control branch scope, and manage active status from
+            Supabase.
           </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Branch:{' '}
+            <span className="font-semibold text-foreground">
+              {activeBranch?.name || 'Select a branch in the header'}
+            </span>
+          </p>
+          {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
         </div>
 
-        <div className="border border-[#153e90]/25 bg-card px-4 py-3 text-sm">
-          <span className="font-semibold">Current role:</span> {role?.name || 'Not selected'}
-        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -274,7 +457,7 @@ export default function Page() {
             <div>
               <div className="text-3xl font-bold">{users.length}</div>
               <div className="mt-1 text-sm text-muted-foreground">Total Users</div>
-              <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">Demo logins and new local users</div>
+              <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">In selected branch</div>
             </div>
             <CustomIcon icon="students.svg" folder={iconFolder} alt="Users" className="h-8 w-8" />
           </div>
@@ -294,9 +477,11 @@ export default function Page() {
         <div className="border border-border bg-card p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-3xl font-bold">{customRoles.length}</div>
-              <div className="mt-1 text-sm text-muted-foreground">Custom Roles</div>
-              <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">Created under parent roles</div>
+              <div className="text-3xl font-bold">{allPermissionProfiles.length}</div>
+              <div className="mt-1 text-sm text-muted-foreground">Permission Profiles</div>
+              <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">
+                {systemProfileCount} system · {customProfileCount} custom
+              </div>
             </div>
             <CustomIcon icon="workstream.svg" folder={iconFolder} alt="Custom Roles" className="h-8 w-8" />
           </div>
@@ -307,7 +492,7 @@ export default function Page() {
             <div>
               <div className="text-3xl font-bold">{activeUsers.length}</div>
               <div className="mt-1 text-sm text-muted-foreground">Active Users</div>
-              <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">Company and branch controlled</div>
+              <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">Branch controlled</div>
             </div>
             <CustomIcon icon="dashboard.svg" folder={iconFolder} alt="Active" className="h-8 w-8" />
           </div>
@@ -320,15 +505,14 @@ export default function Page() {
         </div>
       )}
 
-      <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
-        <div className="space-y-5">
+      <div className="space-y-5">
           {(can('users.create') || can('users.edit')) && (
             <div className="border border-border bg-card p-5">
               <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
                 <div>
                   <h2 className="text-xl font-bold">{editingUserId ? 'Edit User' : 'Create User'}</h2>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Demo user creation. Later this will connect with auth users, profiles, user roles and branch assignments.
+                    Add a user to the active branch.
                   </p>
                 </div>
 
@@ -348,8 +532,8 @@ export default function Page() {
                 <label className="space-y-2">
                   <span className="text-sm font-semibold">Full Name</span>
                   <input
-                    value={formUser.fullName}
-                    onChange={(event) => setFormUser({ ...formUser, fullName: event.target.value })}
+                    value={formUser.full_name}
+                    onChange={(event) => setFormUser({ ...formUser, full_name: event.target.value })}
                     className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
                     placeholder="Enter user name"
                   />
@@ -360,19 +544,32 @@ export default function Page() {
                   <input
                     value={formUser.email}
                     onChange={(event) => setFormUser({ ...formUser, email: event.target.value })}
-                    className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
-                    placeholder="name@pixlpluzportal.demo"
+                    disabled={Boolean(editingUserId)}
+                    className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90] disabled:opacity-60"
+                    placeholder="name@pixlpluz.com"
                   />
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-sm font-semibold">Assigned Role</span>
+                  <span className="text-sm font-semibold">Assigned Profile</span>
                   <select
-                    value={formUser.roleId}
-                    onChange={(event) => setFormUser({ ...formUser, roleId: event.target.value })}
+                    value={formUser.permission_profile_id}
+                    onChange={(event) => {
+                      const permissionProfileId = event.target.value
+                      const profile = permissionProfiles.find((item) => item.id === permissionProfileId)
+                      const isAcademyWideProfile =
+                        profile?.parent_role_id === 'company_admin' ||
+                        profile?.parent_role_id === 'super_admin'
+
+                      setFormUser({
+                        ...formUser,
+                        permission_profile_id: permissionProfileId,
+                        branch_id: isAcademyWideProfile ? null : formUser.branch_id ?? activeBranchId,
+                      })
+                    }}
                     className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
                   >
-                    {roles.map((item) => (
+                    {permissionProfiles.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
                       </option>
@@ -380,16 +577,19 @@ export default function Page() {
                   </select>
                 </label>
 
-            
-
                 <label className="space-y-2">
                   <span className="text-sm font-semibold">Branch Scope</span>
                   <select
-                    value={formUser.branchId || 'b1'}
-                    onChange={(event) => setFormUser({ ...formUser, branchId: event.target.value })}
+                    value={formUser.branch_id || 'all'}
+                    onChange={(event) =>
+                      setFormUser({
+                        ...formUser,
+                        branch_id: event.target.value === 'all' ? null : event.target.value,
+                      })
+                    }
                     className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
                   >
-                    <option value="all">All Branches</option>
+                    {hasAllBranchAccess && <option value="all">All Branches</option>}
                     {allowedBranches.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
@@ -402,7 +602,9 @@ export default function Page() {
                   <span className="text-sm font-semibold">Status</span>
                   <select
                     value={formUser.status}
-                    onChange={(event) => setFormUser({ ...formUser, status: event.target.value as DemoUser['status'] })}
+                    onChange={(event) =>
+                      setFormUser({ ...formUser, status: event.target.value as UserFormInput['status'] })
+                    }
                     className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
                   >
                     <option value="active">Active</option>
@@ -414,11 +616,12 @@ export default function Page() {
               <div className="mt-5 flex flex-wrap gap-3">
                 <button
                   type="button"
-                  onClick={saveUser}
-                  className="inline-flex items-center gap-2 bg-[#153e90] px-5 py-3 font-semibold text-white"
+                  disabled={saving}
+                  onClick={() => void saveUser()}
+                  className="inline-flex items-center gap-2 bg-[#153e90] px-5 py-3 font-semibold text-white disabled:opacity-50"
                 >
                   <CustomIcon icon="students.svg" folder={iconFolder} alt="Save User" className="h-4 w-4" />
-                  {editingUserId ? 'Update User' : 'Add User'}
+                  {saving ? 'Saving…' : editingUserId ? 'Update User' : 'Add User'}
                 </button>
 
                 <button
@@ -438,7 +641,7 @@ export default function Page() {
               <div>
                 <h2 className="text-xl font-bold">User Access Directory</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  View users with parent role, custom role, branch scope and allowed modules.
+                  View users with parent role, permission profile, branch scope and status.
                 </p>
               </div>
 
@@ -455,8 +658,8 @@ export default function Page() {
                   onChange={(event) => setRoleFilter(event.target.value)}
                   className="h-10 w-full border border-border bg-background px-3 text-sm outline-none focus:border-[#153e90]"
                 >
-                  <option value="all">All Roles</option>
-                  {roles.map((item) => (
+                  <option value="all">All Profiles</option>
+                  {permissionProfiles.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.name}
                     </option>
@@ -495,7 +698,6 @@ export default function Page() {
                     <th className="px-4 py-3 font-semibold">User</th>
                     <th className="px-4 py-3 font-semibold">Email</th>
                     <th className="px-4 py-3 font-semibold">Assigned Role</th>
-                   
                     <th className="px-4 py-3 font-semibold">Branch</th>
                     <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 text-center font-semibold">Actions</th>
@@ -503,115 +705,253 @@ export default function Page() {
                 </thead>
 
                 <tbody>
-                  {filteredUsers.map((item) => {
-                    const userModules = getVisibleModules(item.roleId)
-                    const isSelected = selectedUserId === item.id
+                  {loading && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
+                        Loading users…
+                      </td>
+                    </tr>
+                  )}
 
-                    return (
-                      <tr key={item.id} className={isSelected ? 'border-b border-border bg-[#153e90]/5 dark:bg-[#6ee75a]/5' : 'border-b border-border'}>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            
-                             <div className="flex h-10 w-10 items-center justify-center overflow-hidden border border-border bg-background">
-                                                        <Image
-                                                          src={ '/avatar.svg'}
-                                                          alt={item.fullName} 
-                                                          width={40}
-                                                          height={40}
-                                                          className="h-full w-full object-cover"
-                                                        />
-                                                      </div>
-                            <div>
-                              <p className="font-semibold text-foreground">{item.fullName}</p>
-                              <p className="text-xs text-muted-foreground">{getAccessScope(item)}</p>
+                  {!loading &&
+                    directoryUsers.map((item) => {
+                      const isSelected = selectedUserId === item.id
+                      const canManageUser = canManageDirectoryUser(item, parentRoleId)
+                      const canViewUser = canViewDirectoryUser(item, parentRoleId)
+                      const isLockedSuperAdmin = isSuperAdminUserRow(item) && !canViewUser
+
+                      return (
+                        <tr
+                          key={item.id}
+                          className={
+                            isSelected
+                              ? 'border-b border-border bg-[#153e90]/5 dark:bg-[#6ee75a]/5'
+                              : 'border-b border-border'
+                          }
+                        >
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-10 w-10 items-center justify-center overflow-hidden border border-border bg-background">
+                                <Image
+                                  src={item.avatar_url || '/avatar.svg'}
+                                  alt={item.full_name}
+                                  width={40}
+                                  height={40}
+                                  className="h-full w-full object-cover"
+                                />
+                              </div>
+                              <div>
+                                <p className="font-semibold text-foreground">{item.full_name}</p>
+                                <p className="text-xs text-muted-foreground">{getAccessScope(item)}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {getParentRoleName(item.parent_role_id)}
+                                </p>
+                              </div>
                             </div>
-                          </div>
-                        </td>
+                          </td>
 
-                        <td className="px-4 py-3 text-muted-foreground">{item.email}</td>
-                        
-                        <td className="px-4 py-3">
-                          <select
-                            value={item.roleId}
-                            onChange={(event) => assignRole(item, event.target.value)}
-                            disabled={!can('users.assign')}
-                            className="h-9 w-[180px] border border-border bg-background px-2 text-xs outline-none disabled:opacity-60"
-                          >
-                            {roles.map((roleItem) => (
-                              <option key={roleItem.id} value={roleItem.id}>
-                                {roleItem.name}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">{getBranchName(item.branchId)}</td>
-                        <td className="px-4 py-3">
-                          <span className={item.status === 'active' ? 'border border-[#153e90]/25 bg-[#153e90]/10 px-2 py-1 text-xs font-semibold capitalize text-[#153e90] dark:border-[#6ee75a]/25 dark:bg-[#6ee75a]/10 dark:text-white' : 'border border-border bg-background px-2 py-1 text-xs font-semibold capitalize text-muted-foreground'}>
-                            {item.status}
-                          </span>
-                        </td>
-                       
-                        <td className="px-4 py-3">
-                          <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setSelectedUserId(item.id)}
-                              className="border border-border p-2 hover:bg-accent"
-                              title="View"
+                          <td className="px-4 py-3 text-muted-foreground">{item.email}</td>
+
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {item.permission_profile_name}
+                          </td>
+
+                          <td className="px-4 py-3 text-muted-foreground">{getBranchName(item.branch_id)}</td>
+
+                          <td className="px-4 py-3">
+                            <span
+                              className={
+                                item.status === 'active'
+                                  ? 'border border-[#153e90]/25 bg-[#153e90]/10 px-2 py-1 text-xs font-semibold capitalize text-[#153e90] dark:border-[#6ee75a]/25 dark:bg-[#6ee75a]/10 dark:text-white'
+                                  : 'border border-border bg-background px-2 py-1 text-xs font-semibold capitalize text-muted-foreground'
+                              }
                             >
-                              <CustomIcon icon="dashboard.svg" folder={iconFolder} alt="View" className="h-4 w-4" />
-                            </button>
+                              {item.status}
+                            </span>
+                          </td>
 
-                            {can('users.edit') && (
-                              <button
-                                type="button"
-                                onClick={() => editUser(item)}
-                                className="border border-border p-2 hover:bg-accent"
-                                title="Edit"
-                              >
-                                <CustomIcon icon="submissions.svg" folder={iconFolder} alt="Edit" className="h-4 w-4" />
-                              </button>
-                            )}
+                          <td className="px-4 py-3">
+                            <div className="flex justify-end gap-2">
+                              {isLockedSuperAdmin ? (
+                                <span className="border border-border px-3 py-2 text-xs font-semibold text-muted-foreground">
+                                  Feature locked
+                                </span>
+                              ) : (
+                                <>
+                              {canViewUser && (
+                                <Link
+                                  href={`/users/${item.id}`}
+                                  onClick={() => setSelectedUserId(item.id)}
+                                  className="border border-border p-2 hover:bg-accent"
+                                  title="View"
+                                >
+                                  <CustomIcon icon="dashboard.svg" folder={iconFolder} alt="View" className="h-4 w-4" />
+                                </Link>
+                              )}
 
-                            {can('users.edit') && (
-                              <button
-                                type="button"
-                                onClick={() => toggleUserStatus(item)}
-                                className="border border-border p-2 hover:bg-accent"
-                                title="Enable or Disable"
-                              >
-                                <CustomIcon icon="attendance.svg" folder={iconFolder} alt="Enable Disable" className="h-4 w-4" />
-                              </button>
-                            )}
+                              {can('users.edit') && canManageUser && (
+                                <button
+                                  type="button"
+                                  onClick={() => editUser(item)}
+                                  className="border border-border p-2 hover:bg-accent"
+                                  title="Edit"
+                                >
+                                  <CustomIcon
+                                    icon="submissions.svg"
+                                    folder={iconFolder}
+                                    alt="Edit"
+                                    className="h-4 w-4"
+                                  />
+                                </button>
+                              )}
 
-                            {can('users.delete') && (
-                              <button
-                                type="button"
-                                onClick={() => deleteUser(item.id)}
-                                className="border border-border p-2 hover:bg-red-500/10"
-                                title="Delete"
-                              >
-                                <CustomIcon icon="reviews.svg" folder={iconFolder} alt="Delete" className="h-4 w-4" />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                              {can('users.edit') && canManageUser && (
+                                <button
+                                  type="button"
+                                  disabled={saving}
+                                  onClick={() => void toggleUserStatus(item)}
+                                  className="border border-border p-2 hover:bg-accent disabled:opacity-50"
+                                  title="Enable or Disable"
+                                >
+                                  <CustomIcon
+                                    icon="attendance.svg"
+                                    folder={iconFolder}
+                                    alt="Enable Disable"
+                                    className="h-4 w-4"
+                                  />
+                                </button>
+                              )}
+
+                              {can('users.delete') && canManageUser && (
+                                <button
+                                  type="button"
+                                  disabled={saving}
+                                  onClick={() => void deleteUser(item.id)}
+                                  className="border border-border p-2 hover:bg-red-500/10 disabled:opacity-50"
+                                  title="Delete"
+                                >
+                                  <CustomIcon icon="reviews.svg" folder={iconFolder} alt="Delete" className="h-4 w-4" />
+                                </button>
+                              )}
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
                 </tbody>
               </table>
             </div>
 
-            {filteredUsers.length === 0 && (
+            {!loading && directoryUsers.length === 0 && (
               <div className="mt-5 border border-border bg-background p-6 text-center text-sm text-muted-foreground">
-                No users found for the selected filters.
+                No users found for the selected branch and filters.
               </div>
             )}
           </div>
-        </div>
-
       </div>
+
+      <Dialog
+        open={Boolean(createdCredentials)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCreatedCredentials(null)
+            setCopyNotice('')
+          }
+        }}
+      >
+        <DialogContent className="border border-border bg-card sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>User Created</DialogTitle>
+            <DialogDescription>
+              Login credentials for the new user. Copy and share them securely.
+            </DialogDescription>
+          </DialogHeader>
+
+          {createdCredentials && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <span className="text-sm font-semibold">Name</span>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={createdCredentials.fullName}
+                    className="h-10 min-w-0 flex-1 border border-border bg-background px-3 text-sm outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void copyCredential('Name', createdCredentials.fullName)}
+                    className="shrink-0 border border-border px-3 text-sm font-semibold hover:bg-accent"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className="text-sm font-semibold">Email</span>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={createdCredentials.email}
+                    className="h-10 min-w-0 flex-1 border border-border bg-background px-3 text-sm outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void copyCredential('Email', createdCredentials.email)}
+                    className="shrink-0 border border-border px-3 text-sm font-semibold hover:bg-accent"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <span className="text-sm font-semibold">Password</span>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    value={createdCredentials.password}
+                    className="h-10 min-w-0 flex-1 border border-border bg-background px-3 text-sm font-semibold text-[#153e90] outline-none dark:text-[#6ee75a]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void copyCredential('Password', createdCredentials.password)}
+                    className="shrink-0 border border-border px-3 text-sm font-semibold hover:bg-accent"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+
+              {copyNotice && (
+                <p className="text-sm font-semibold text-[#153e90] dark:text-[#6ee75a]">{copyNotice}</p>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:justify-between">
+            <button
+              type="button"
+              onClick={() => void copyAllCredentials()}
+              className="inline-flex items-center justify-center border border-border px-4 py-2 text-sm font-semibold hover:bg-accent"
+            >
+              Copy All
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatedCredentials(null)
+                setCopyNotice('')
+              }}
+              className="inline-flex items-center justify-center bg-[#153e90] px-4 py-2 text-sm font-semibold text-white"
+            >
+              Done
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

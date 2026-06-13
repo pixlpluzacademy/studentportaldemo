@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { callerHasPermission, getCallerFromBearerToken } from '@/lib/auth/admin'
+import { callerHasPermission, getCallerFromBearerToken, getCallerProfile } from '@/lib/auth/admin'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(request: Request) {
@@ -27,6 +27,19 @@ export async function POST(request: Request) {
 
     if (profileId === caller.id) {
       return NextResponse.json({ error: 'You cannot delete your own account.' }, { status: 400 })
+    }
+
+    const targetProfile = await getCallerProfile(profileId)
+    const callerProfile = await getCallerProfile(caller.id)
+
+    if (
+      targetProfile?.parent_role_id === 'super_admin' &&
+      callerProfile?.parent_role_id !== 'super_admin'
+    ) {
+      return NextResponse.json(
+        { error: 'Only Super Admin can delete Super Admin users.' },
+        { status: 403 },
+      )
     }
 
     if (studentId) {

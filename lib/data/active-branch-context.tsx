@@ -2,6 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { storageKeys } from '@/lib/branding'
+import { resolveHasAllBranchAccess } from '@/lib/auth/branch-access'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchNav } from '@/lib/data/hooks/use-branches'
 import type { BranchNavItem } from '@/lib/data/branches'
@@ -18,18 +19,22 @@ type ActiveBranchContextValue = {
 const ActiveBranchContext = createContext<ActiveBranchContextValue | null>(null)
 
 export function ActiveBranchProvider({ children }: { children: React.ReactNode }) {
-  const { user, role } = useAuth()
+  const { user, role, parentRoleId, can } = useAuth()
   const { branches: branchNavItems, loading: branchesLoading } = useBranchNav()
 
   const [activeBranchId, setActiveBranchIdState] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
 
-  const hasAllBranchAccess = useMemo(() => {
-    if (!user) return true
-    if (user.branchId === 'all') return true
-    if (role?.id === 'superadmin' || role?.id === 'admin') return true
-    return false
-  }, [role?.id, user])
+  const hasAllBranchAccess = useMemo(
+    () =>
+      resolveHasAllBranchAccess({
+        parentRoleId,
+        branchId: user?.branchId ?? null,
+        legacyRoleId: role?.id ?? null,
+        canSwitchBranches: can('branches.switch'),
+      }),
+    [can, parentRoleId, role?.id, user?.branchId],
+  )
 
   const allowedBranches = useMemo(() => {
     if (!user || hasAllBranchAccess) return branchNavItems

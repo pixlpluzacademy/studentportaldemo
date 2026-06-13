@@ -10,6 +10,7 @@ export type DepartmentListRow = {
   branch_id: string
   name: string
   slug: string
+  department_code: string | null
   description: string
   status: DepartmentUiStatus
   created_at: string
@@ -18,6 +19,7 @@ export type DepartmentListRow = {
 
 export type DepartmentFormInput = {
   name: string
+  department_code: string
   description: string
   status: DepartmentUiStatus
 }
@@ -29,6 +31,7 @@ type DbDepartmentRow = {
   branch_id: string
   name: string
   slug: string
+  department_code: string | null
   description: string | null
   status: DbDepartmentStatus
   created_at: string
@@ -40,6 +43,7 @@ const departmentSelect = `
   branch_id,
   name,
   slug,
+  department_code,
   description,
   status,
   created_at,
@@ -59,12 +63,17 @@ function mapUiStatusToDb(status: DepartmentUiStatus): DbDepartmentStatus {
   return status === 'active' ? 'active' : 'inactive'
 }
 
+function normalizeDepartmentCode(value: string) {
+  return value.trim().toUpperCase()
+}
+
 function mapDbDepartmentToListRow(row: DbDepartmentRow): DepartmentListRow {
   return {
     id: row.id,
     branch_id: row.branch_id,
     name: row.name,
     slug: row.slug,
+    department_code: row.department_code,
     description: row.description || '—',
     status: mapDbStatusToUi(row.status),
     created_at: formatDate(row.created_at),
@@ -168,11 +177,32 @@ async function resolveDepartmentSlug(
   return { ok: false, error: 'Could not generate a unique department slug.' }
 }
 
+async function isDepartmentCodeTaken(
+  client: SupabaseClient,
+  departmentCode: string,
+  excludeId?: string,
+): Promise<boolean> {
+  let query = client
+    .from('departments')
+    .select('id')
+    .eq('department_code', departmentCode)
+
+  if (excludeId) {
+    query = query.neq('id', excludeId)
+  }
+
+  const { data } = await query.maybeSingle()
+  return Boolean(data)
+}
+
 function buildDepartmentPayload(input: DepartmentFormInput, slug: string, branchId: string) {
+  const departmentCode = normalizeDepartmentCode(input.department_code)
+
   return {
     branch_id: branchId,
     name: input.name.trim(),
     slug,
+    department_code: departmentCode || null,
     description: input.description.trim() || null,
     status: mapUiStatusToDb(input.status),
   }
@@ -190,6 +220,16 @@ export async function createDepartmentRecord(
   }
 
   try {
+    const departmentCode = normalizeDepartmentCode(input.department_code)
+
+    if (!departmentCode) {
+      return { ok: false, error: 'Department code is required.' }
+    }
+
+    if (await isDepartmentCodeTaken(client, departmentCode)) {
+      return { ok: false, error: 'This department code is already in use.' }
+    }
+
     const slugResult = await resolveDepartmentSlug(client, input, branchId)
 
     if (!slugResult.ok) {
@@ -228,6 +268,16 @@ export async function updateDepartmentRecord(
   }
 
   try {
+    const departmentCode = normalizeDepartmentCode(input.department_code)
+
+    if (!departmentCode) {
+      return { ok: false, error: 'Department code is required.' }
+    }
+
+    if (await isDepartmentCodeTaken(client, departmentCode, id)) {
+      return { ok: false, error: 'This department code is already in use.' }
+    }
+
     const slugResult = await resolveDepartmentSlug(client, input, branchId, id)
 
     if (!slugResult.ok) {

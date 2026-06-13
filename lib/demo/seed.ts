@@ -23,7 +23,7 @@ export const permissionActions: PermissionAction[] = [
 export const demoModules: DemoModule[] = [
   { id: 'dashboard', label: 'Dashboard', href: '/dashboard', description: 'Overview, KPIs, quick activity and branch health.', actions: ['view'] },
   { id: 'departments', label: 'Departments', href: '/departments', description: 'Skill areas / specializations linking courses and eligible mentors.', actions: ['view', 'create', 'edit', 'delete'] },
-  { id: 'branches', label: 'Branches', href: '/branches', description: 'Branch setup and branch controller allocation.', actions: ['view', 'create', 'edit', 'delete', 'assign'] },
+  { id: 'branches', label: 'Branches', href: '/branches', description: 'Branch setup and branch controller allocation.', actions: ['view', 'create', 'edit', 'delete', 'assign', 'switch'] },
   { id: 'users', label: 'Users', href: '/users', description: 'Create users and assign roles, company and branch scope.', actions: ['view', 'create', 'edit', 'delete', 'assign'] },
   { id: 'roles', label: 'Role Management', href: '/role-management', description: 'CRM style role builder with module and action permissions.', actions: ['view', 'create', 'edit', 'delete', 'assign'] },
   { id: 'courses', label: 'Courses', href: '/courses', description: 'Course blueprint, curriculum, tracks, tools and tasks.', actions: ['view', 'create', 'edit', 'delete'] },

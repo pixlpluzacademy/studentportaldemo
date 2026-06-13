@@ -154,11 +154,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  useEffect(() => {
+    setOpenGroups({})
+    setBranchOpen(false)
+    setProfileOpen(false)
+  }, [user?.id])
 
   const logoSrc = mounted && resolvedTheme === 'light' ? '/pixlpluz-dark-logo.svg' : '/pixlpluz-white-logo.svg'
 
@@ -234,6 +241,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   >
                     <Link
                       href={parentHref}
+                      onClick={() => {
+                        if (!sidebarCollapsed) {
+                          setOpenGroups({ [group.label]: true })
+                        }
+                      }}
                       className={cn('flex min-w-0 flex-1 items-center gap-3 px-3 py-2', sidebarCollapsed && 'justify-center')}
                       title={sidebarCollapsed ? group.label : undefined}
                     >
@@ -385,7 +397,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </span>
             </Button>
 
-            <DropdownMenu>
+            <DropdownMenu open={profileOpen} onOpenChange={setProfileOpen}>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 px-2 py-1.5 transition-colors hover:bg-muted">
                   <Avatar className="h-9 w-9">

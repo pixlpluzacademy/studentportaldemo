@@ -103,6 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     role,
     users,
     roles,
+    parentRoleId: (parentRoleId as AuthContextValue['parentRoleId']) || null,
     sessionState,
     login,
     logout,

@@ -4,8 +4,10 @@ import { useMemo, useRef, useState } from 'react'
 import { useDemoAuth } from '@/lib/demo/auth'
 import {
   assignUserPermissionProfile,
+  canManagePermissionProfile,
   deletePermissionProfile,
   enabledModulesFromPermissionKeys,
+  isElevatedPermissionProfile,
   savePermissionProfile,
   type PermissionProfileItem,
 } from '@/lib/data/permissions'
@@ -38,6 +40,13 @@ function isSuperAdminProfile(profile: Pick<PermissionProfileItem, 'slug'>) {
   return profile.slug === 'super_admin_full'
 }
 
+function isProfileLockedForActor(
+  profile: Pick<PermissionProfileItem, 'slug' | 'parent_role_id'>,
+  actorParentRoleId: string | null | undefined,
+) {
+  return isElevatedPermissionProfile(profile) && !canManagePermissionProfile(actorParentRoleId, profile)
+}
+
 function isSuperAdminUser(demoUser: { roleId: string }) {
   return demoUser.roleId === 'superadmin' || demoUser.roleId === 'super_admin'
 }
@@ -55,7 +64,8 @@ function profileToEditing(profile: PermissionProfileItem): EditingProfile {
 }
 
 export default function RoleManagementPage() {
-  const { users, can, refreshSession } = useDemoAuth()
+  const { users, can, refreshSession, parentRoleId } = useDemoAuth()
+  const isSuperAdmin = parentRoleId === 'super_admin'
 
   const { profiles, profilesByParentRole, parentRoles, allParentRoles, moduleGroups, actions, loading, error, reload } =
     useRoleManagementData()
@@ -74,8 +84,8 @@ export default function RoleManagementPage() {
   )
 
   const assignableProfiles = useMemo(
-    () => profiles.filter((profile) => !isSuperAdminProfile(profile)),
-    [profiles],
+    () => profiles.filter((profile) => canManagePermissionProfile(parentRoleId, profile)),
+    [parentRoleId, profiles],
   )
 
   const enabledModules = useMemo(
@@ -84,7 +94,7 @@ export default function RoleManagementPage() {
   )
 
   const canSaveProfile = editing.id ? can('roles.edit') : can('roles.create')
-  const isLockedProfile = editing.slug === 'super_admin_full'
+  const isLockedProfile = isProfileLockedForActor(editing, parentRoleId)
   const isEditingExisting = Boolean(editing.id)
   const canEditFields = canSaveProfile && !isLockedProfile
 
@@ -150,7 +160,7 @@ export default function RoleManagementPage() {
     }
 
     if (isLockedProfile) {
-      setNotice('Super Admin profile is locked.')
+      setNotice('Only Super Admin can edit Super Admin and Company Admin profiles.')
       return
     }
 
@@ -177,6 +187,8 @@ export default function RoleManagementPage() {
           permissionKeys: editing.permissionKeys,
         },
         editing.id,
+        undefined,
+        { actorParentRoleId: parentRoleId },
       )
 
       if (!result.ok) {
@@ -199,6 +211,11 @@ export default function RoleManagementPage() {
   }
 
   const editRole = (profile: PermissionProfileItem) => {
+    if (isProfileLockedForActor(profile, parentRoleId)) {
+      setNotice('Only Super Admin can edit Super Admin and Company Admin profiles.')
+      return
+    }
+
     setEditing(profileToEditing(profile))
     setNotice(`Editing "${profile.name}". Update the profile name below, then click Save Profile.`)
 
@@ -209,6 +226,11 @@ export default function RoleManagementPage() {
 
   const setProfileStatus = async (profile: PermissionProfileItem, status: 'active' | 'inactive') => {
     if (profile.status === status) return
+
+    if (isProfileLockedForActor(profile, parentRoleId)) {
+      setNotice('Only Super Admin can change Super Admin and Company Admin profile status.')
+      return
+    }
 
     if (isSuperAdminProfile(profile)) {
       setNotice('Super Admin profile status cannot be changed.')
@@ -232,6 +254,8 @@ export default function RoleManagementPage() {
           permissionKeys: profile.permissions,
         },
         profile.id,
+        undefined,
+        { actorParentRoleId: parentRoleId },
       )
 
       if (!result.ok) {
@@ -252,6 +276,11 @@ export default function RoleManagementPage() {
   }
 
   const deleteRole = async (profile: PermissionProfileItem) => {
+    if (isProfileLockedForActor(profile, parentRoleId)) {
+      setNotice('Only Super Admin can delete Super Admin and Company Admin profiles.')
+      return
+    }
+
     if (isSuperAdminProfile(profile)) {
       setNotice('Super Admin profile cannot be deleted.')
       return
@@ -266,7 +295,9 @@ export default function RoleManagementPage() {
     setNotice('')
 
     try {
-      const result = await deletePermissionProfile(profile.id)
+      const result = await deletePermissionProfile(profile.id, undefined, {
+        actorParentRoleId: parentRoleId,
+      })
       if (!result.ok) {
         setNotice(result.error)
         return
@@ -294,7 +325,9 @@ export default function RoleManagementPage() {
     setNotice('')
 
     try {
-      const result = await assignUserPermissionProfile(selectedUserId, selectedProfileId)
+      const result = await assignUserPermissionProfile(selectedUserId, selectedProfileId, undefined, {
+        actorParentRoleId: parentRoleId,
+      })
       if (!result.ok) {
         setNotice(result.error)
         return
@@ -337,6 +370,11 @@ export default function RoleManagementPage() {
           {' · '}
           Data source: <span className="font-semibold text-foreground">Supabase (live)</span>
         </p>
+        {!isSuperAdmin && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Super Admin and Company Admin system profiles are view-only for your role.
+          </p>
+        )}
         {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
       </div>
 
@@ -639,7 +677,12 @@ export default function RoleManagementPage() {
                         <div className="flex items-center gap-2">
                         <button
                                 type="button"
-                                disabled={profile.status === 'active' || saving || !can('roles.edit')}
+                                disabled={
+                                  profile.status === 'active' ||
+                                  saving ||
+                                  !can('roles.edit') ||
+                                  isProfileLockedForActor(profile, parentRoleId)
+                                }
                                 onClick={() => void setProfileStatus(profile, 'active')}
                                 className={getStatusButtonClass(profile.status, 'active')}
                               >
@@ -648,7 +691,12 @@ export default function RoleManagementPage() {
 
                               <button
                                 type="button"
-                                disabled={profile.status === 'inactive' || saving || !can('roles.edit')}
+                                disabled={
+                                  profile.status === 'inactive' ||
+                                  saving ||
+                                  !can('roles.edit') ||
+                                  isProfileLockedForActor(profile, parentRoleId)
+                                }
                                 onClick={() => void setProfileStatus(profile, 'inactive')}
                                 className={getStatusButtonClass(profile.status, 'inactive')}
                               >
@@ -658,9 +706,9 @@ export default function RoleManagementPage() {
                         </td>
 
                         <td className="whitespace-nowrap px-4 py-3 text-right">
-                          {isSuperAdminProfile(profile) ? (
+                          {isProfileLockedForActor(profile, parentRoleId) ? (
                             <span className="inline-flex min-w-[280px] justify-end text-xs text-muted-foreground">
-                              Locked · Active
+                              {isSuperAdminProfile(profile) ? 'Locked · Active' : 'Super Admin only'}
                             </span>
                           ) : (
                             <div className="inline-flex min-w-[280px] justify-end gap-2">

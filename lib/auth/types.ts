@@ -15,6 +15,7 @@ export type AuthContextValue = {
   role: DemoRole | null
   users: DemoUser[]
   roles: DemoRole[]
+  parentRoleId: ParentRoleId | null
   sessionState: AuthSessionState
   login: (email: string, password: string) => Promise<{ ok: true } | { ok: false; error: string }>
   logout: () => Promise<void>

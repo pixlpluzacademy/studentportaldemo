@@ -14,6 +14,7 @@ export type PermissionAction =
   | 'edit'
   | 'delete'
   | 'assign'
+  | 'switch'
   | 'review'
   | 'approve'
   | 'upload'

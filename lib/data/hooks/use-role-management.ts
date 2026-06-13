@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useAuth } from '@/lib/auth/provider'
 import {
   catalogActions,
   fetchAllParentRoles,
@@ -9,6 +10,7 @@ import {
   fetchPermissionProfiles,
   groupCatalogByModule,
   groupProfilesByParentRole,
+  isElevatedPermissionProfile,
   type ParentRoleItem,
   type PermissionCatalogItem,
   type PermissionModuleGroup,
@@ -16,6 +18,7 @@ import {
 } from '@/lib/data/permissions'
 
 export function useRoleManagementData() {
+  const { parentRoleId } = useAuth()
   const [profiles, setProfiles] = useState<PermissionProfileItem[]>([])
   const [catalog, setCatalog] = useState<PermissionCatalogItem[]>([])
   const [allParentRoles, setAllParentRoles] = useState<ParentRoleItem[]>([])
@@ -35,7 +38,7 @@ export function useRoleManagementData() {
           fetchPermissionProfiles(),
           fetchPermissionCatalog(),
           fetchAllParentRoles(),
-          fetchParentRoles(),
+          fetchParentRoles(undefined, { actorParentRoleId: parentRoleId }),
         ])
 
       if (profileResult.error) setError(profileResult.error)
@@ -54,7 +57,7 @@ export function useRoleManagementData() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [parentRoleId])
 
   useEffect(() => {
     void reload()

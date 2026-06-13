@@ -23,6 +23,7 @@ export default function DepartmentsPage() {
 
   const [form, setForm] = useState<DepartmentFormInput>({
     name: '',
+    department_code: '',
     description: '',
     status: 'active',
   })
@@ -46,6 +47,7 @@ export default function DepartmentsPage() {
   const resetForm = () => {
     setForm({
       name: '',
+      department_code: '',
       description: '',
       status: 'active',
     })
@@ -61,6 +63,7 @@ export default function DepartmentsPage() {
     setEditingDepartment(department)
     setForm({
       name: department.name,
+      department_code: department.department_code || '',
       description: department.description === '—' ? '' : department.description,
       status: department.status,
     })
@@ -75,6 +78,11 @@ export default function DepartmentsPage() {
   const handleSave = async () => {
     if (!form.name.trim()) {
       setNotice('Department name is required.')
+      return
+    }
+
+    if (!form.department_code.trim()) {
+      setNotice('Department code is required.')
       return
     }
 
@@ -180,9 +188,8 @@ export default function DepartmentsPage() {
               <span className="font-semibold text-foreground">
                 {activeBranch?.name || 'Select a branch in the header'}
               </span>
-              
             </p>
-            
+
             {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
             {notice && <p className="mt-2 text-sm text-[#153e90] dark:text-[#6ee75a]">{notice}</p>}
           </div>
@@ -220,10 +227,11 @@ export default function DepartmentsPage() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-sm">
+            <table className="w-full min-w-[1050px] text-left text-sm">
               <thead className="border-b border-border bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-5 py-3">Department Name</th>
+                  <th className="px-5 py-3">Department Code</th>
                   <th className="px-5 py-3">Branch</th>
                   <th className="px-5 py-3">Description</th>
                   <th className="px-5 py-3">Status</th>
@@ -235,7 +243,7 @@ export default function DepartmentsPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={6} className="px-5 py-10 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-5 py-10 text-center text-muted-foreground">
                       Loading departments…
                     </td>
                   </tr>
@@ -245,6 +253,9 @@ export default function DepartmentsPage() {
                   departments.map((department) => (
                     <tr key={department.id} className="border-b border-border last:border-b-0">
                       <td className="px-5 py-4 font-semibold">{department.name}</td>
+                      <td className="px-5 py-4 font-semibold">
+                        {department.department_code || '—'}
+                      </td>
                       <td className="px-5 py-4 text-muted-foreground">{activeBranch?.name}</td>
                       <td className="px-5 py-4 text-muted-foreground">{department.description}</td>
                       <td className="px-5 py-4">
@@ -288,7 +299,7 @@ export default function DepartmentsPage() {
 
                 {!loading && !activeBranchId && (
                   <tr>
-                    <td colSpan={6} className="px-5 py-10 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-5 py-10 text-center text-muted-foreground">
                       Select a branch from the header to view departments.
                     </td>
                   </tr>
@@ -296,7 +307,7 @@ export default function DepartmentsPage() {
 
                 {!loading && activeBranchId && departments.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-5 py-10 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-5 py-10 text-center text-muted-foreground">
                       No departments created yet.
                     </td>
                   </tr>
@@ -326,6 +337,21 @@ export default function DepartmentsPage() {
                     setForm((prev) => ({ ...prev, name: event.target.value }))
                   }
                   placeholder="Example: Digital Marketing"
+                  className="w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-semibold">Department Code</label>
+                <input
+                  value={form.department_code}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      department_code: event.target.value.toUpperCase(),
+                    }))
+                  }
+                  placeholder="Example: DM"
                   className="w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                 />
               </div>

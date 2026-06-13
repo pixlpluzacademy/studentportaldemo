@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DemoRole, PermissionKey } from '@/lib/demo/types'
 import type { DataResult } from '@/lib/data/config'
+import {
+  canCreateProfileUnderParent,
+  canManagePermissionProfile,
+  isElevatedPermissionProfile,
+} from '@/lib/auth/role-management-access'
 import { createClient } from '@/lib/supabase/client'
 
 /**
@@ -51,6 +56,7 @@ const permissionActionOrder = [
   'edit',
   'delete',
   'assign',
+  'switch',
   'review',
   'approve',
   'upload',
@@ -135,6 +141,27 @@ function slugifyProfileName(name: string) {
     .replace(/^_+|_+$/g, '')
 
   return base || `profile_${Date.now()}`
+}
+
+async function resolveActorParentRoleId(
+  client: SupabaseClient,
+  provided?: string | null,
+): Promise<string | null> {
+  if (provided) return provided
+
+  const {
+    data: { user },
+  } = await client.auth.getUser()
+
+  if (!user) return null
+
+  const { data: profile } = await client
+    .from('profiles')
+    .select('parent_role_id')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  return profile?.parent_role_id ?? null
 }
 
 async function syncProfilePermissions(
@@ -331,19 +358,28 @@ export async function fetchAllParentRoles(
   return { data: (data || []) as ParentRoleItem[] }
 }
 
-/** Parent roles available when creating a custom permission profile (excludes Super Admin). */
+/** Parent roles available when creating a custom permission profile. */
 export async function fetchParentRoles(
   supabase?: SupabaseClient,
+  options?: { actorParentRoleId?: string | null },
 ): Promise<{ data: ParentRoleItem[]; error?: string }> {
   const result = await fetchAllParentRoles(supabase)
   if (result.error) {
     return result
   }
 
+  const isSuperAdmin = options?.actorParentRoleId === 'super_admin'
+
   return {
-    data: result.data.filter((role) => role.id !== 'super_admin'),
+    data: result.data.filter((role) => {
+      if (role.id === 'super_admin') return false
+      if (!isSuperAdmin && role.id === 'company_admin') return false
+      return true
+    }),
   }
 }
+
+export { isElevatedPermissionProfile, canManagePermissionProfile, canCreateProfileUnderParent }
 
 export function groupProfilesByParentRole(
   profiles: PermissionProfileItem[],
@@ -363,11 +399,37 @@ export async function savePermissionProfile(
   input: PermissionProfileInput,
   profileId?: string | null,
   supabase?: SupabaseClient,
+  options?: { actorParentRoleId?: string | null },
 ): Promise<{ ok: true; profile: PermissionProfileItem } | { ok: false; error: string }> {
   const client = supabase ?? createClient()
+  const actorParentRoleId = await resolveActorParentRoleId(client, options?.actorParentRoleId)
+
+  if (!canCreateProfileUnderParent(actorParentRoleId, input.parent_role_id)) {
+    return {
+      ok: false,
+      error: 'Only Super Admin can manage Company Admin and Super Admin permission profiles.',
+    }
+  }
 
   try {
     if (profileId) {
+      const { data: existingProfile, error: readError } = await client
+        .from('permission_profiles')
+        .select('id, slug, name, parent_role_id, is_system, status')
+        .eq('id', profileId)
+        .maybeSingle()
+
+      if (readError || !existingProfile) {
+        return { ok: false, error: readError?.message || 'Permission profile not found.' }
+      }
+
+      if (!canManagePermissionProfile(actorParentRoleId, existingProfile)) {
+        return {
+          ok: false,
+          error: 'Only Super Admin can edit Super Admin and Company Admin profiles.',
+        }
+      }
+
       const { data, error } = await client
         .from('permission_profiles')
         .update({
@@ -464,17 +526,26 @@ export async function savePermissionProfile(
 export async function deletePermissionProfile(
   profileId: string,
   supabase?: SupabaseClient,
+  options?: { actorParentRoleId?: string | null },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const client = supabase ?? createClient()
+  const actorParentRoleId = await resolveActorParentRoleId(client, options?.actorParentRoleId)
 
   const { data: profile, error: readError } = await client
     .from('permission_profiles')
-    .select('id, is_system, slug')
+    .select('id, is_system, slug, parent_role_id')
     .eq('id', profileId)
     .maybeSingle()
 
   if (readError || !profile) {
     return { ok: false, error: readError?.message || 'Permission profile not found.' }
+  }
+
+  if (!canManagePermissionProfile(actorParentRoleId, profile)) {
+    return {
+      ok: false,
+      error: 'Only Super Admin can delete Super Admin and Company Admin profiles.',
+    }
   }
 
   if (profile.is_system || profile.slug === 'super_admin_full') {
@@ -494,17 +565,26 @@ export async function assignUserPermissionProfile(
   userId: string,
   profileId: string,
   supabase?: SupabaseClient,
+  options?: { actorParentRoleId?: string | null },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const client = supabase ?? createClient()
+  const actorParentRoleId = await resolveActorParentRoleId(client, options?.actorParentRoleId)
 
   const { data: profile, error: profileError } = await client
     .from('permission_profiles')
-    .select('slug')
+    .select('slug, parent_role_id')
     .eq('id', profileId)
     .maybeSingle()
 
   if (profileError || !profile) {
     return { ok: false, error: profileError?.message || 'Permission profile not found.' }
+  }
+
+  if (!canManagePermissionProfile(actorParentRoleId, profile)) {
+    return {
+      ok: false,
+      error: 'Only Super Admin can assign Super Admin and Company Admin profiles.',
+    }
   }
 
   if (profile.slug === 'super_admin_full') {

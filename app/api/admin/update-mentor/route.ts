@@ -6,8 +6,6 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 const FINAL_QA_SLUG = 'mentor_final_qa'
 
 export async function POST(request: Request) {
-  let createdUserId: string | null = null
-
   try {
     const token = request.headers.get('authorization')?.replace('Bearer ', '')
     const caller = await getCallerFromBearerToken(token)
@@ -16,52 +14,48 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized. Please login again.' }, { status: 401 })
     }
 
-    const canCreate =
-      (await callerHasPermission(caller.id, 'mentors.create')) ||
-      (await callerHasPermission(caller.id, 'users.create'))
+    const canEdit =
+      (await callerHasPermission(caller.id, 'mentors.edit')) ||
+      (await callerHasPermission(caller.id, 'users.edit'))
 
-    if (!canCreate) {
-      return NextResponse.json({ error: 'You do not have permission to create mentors.' }, { status: 403 })
+    if (!canEdit) {
+      return NextResponse.json({ error: 'You do not have permission to edit mentors.' }, { status: 403 })
     }
 
     const body = await request.json()
 
+    const mentorId = String(body.mentorId || body.mentor_id || '').trim()
+    const branchId = String(body.branchId || body.branch_id || '').trim()
     const fullName = String(body.full_name || body.fullName || '').trim()
     const email = String(body.email || '').trim().toLowerCase()
-    const password = String(body.password || '').trim()
     const departmentId = String(body.department_id || body.departmentId || '').trim()
     const permissionProfileId = String(body.permission_profile_id || body.permissionProfileId || '').trim()
-    const branchId = String(body.branch_id || body.branchId || '').trim()
     const reportsToRaw = String(body.reports_to || body.reportsTo || '').trim()
     const reportsTo = reportsToRaw || null
     const phone = String(body.phone || '').trim()
     const joiningDate = String(body.joining_date || body.joiningDate || '').trim()
     const status = body.status === 'inactive' ? 'inactive' : 'active'
 
-    if (!fullName || !email) {
-      return NextResponse.json({ error: 'Full name and email are required.' }, { status: 400 })
+    if (!mentorId || !branchId || !fullName || !email || !departmentId || !permissionProfileId) {
+      return NextResponse.json({ error: 'Missing required mentor fields.' }, { status: 400 })
     }
 
-    if (!departmentId) {
-      return NextResponse.json({ error: 'Department is required.' }, { status: 400 })
+    if (reportsTo === mentorId) {
+      return NextResponse.json({ error: 'A mentor cannot report to themselves.' }, { status: 400 })
     }
 
-    if (!permissionProfileId) {
-      return NextResponse.json({ error: 'Mentor type (permission profile) is required.' }, { status: 400 })
-    }
-
-    if (!branchId) {
-      return NextResponse.json({ error: 'Branch is required.' }, { status: 400 })
-    }
-
-    const { data: existingProfile } = await supabaseAdmin
-      .from('profiles')
-      .select('id')
-      .eq('email', email)
+    const { data: existingDetails, error: detailsReadError } = await supabaseAdmin
+      .from('mentor_details')
+      .select('profile_id, branch_id')
+      .eq('profile_id', mentorId)
       .maybeSingle()
 
-    if (existingProfile) {
-      return NextResponse.json({ error: 'A user with this email already exists.' }, { status: 409 })
+    if (detailsReadError) {
+      return NextResponse.json({ error: detailsReadError.message }, { status: 400 })
+    }
+
+    if (existingDetails && existingDetails.branch_id !== branchId) {
+      return NextResponse.json({ error: 'Mentor does not belong to this branch.' }, { status: 400 })
     }
 
     const { data: permissionProfile, error: profileReadError } = await supabaseAdmin
@@ -74,12 +68,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Permission profile not found.' }, { status: 400 })
     }
 
-    if (permissionProfile.parent_role_id !== 'mentor') {
-      return NextResponse.json({ error: 'Selected profile is not a mentor type.' }, { status: 400 })
-    }
-
-    if (permissionProfile.slug === FINAL_QA_SLUG) {
-      return NextResponse.json({ error: 'Final QA mentors are managed separately.' }, { status: 400 })
+    if (permissionProfile.parent_role_id !== 'mentor' || permissionProfile.slug === FINAL_QA_SLUG) {
+      return NextResponse.json({ error: 'Invalid mentor type for this directory.' }, { status: 400 })
     }
 
     const { data: department, error: departmentError } = await supabaseAdmin
@@ -103,99 +93,74 @@ export async function POST(request: Request) {
       }
     }
 
-    const temporaryPassword = password || `Welcome@${Math.random().toString(36).slice(2, 10)}`
-
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password: temporaryPassword,
-      email_confirm: true,
-      user_metadata: {
-        full_name: fullName,
-        parent_role_id: 'mentor',
-        permission_profile_slug: permissionProfile.slug,
-      },
-    })
-
-    if (authError || !authData.user) {
-      return NextResponse.json(
-        { error: authError?.message || 'Failed to create mentor user.' },
-        { status: 400 },
-      )
-    }
-
-    const userId = authData.user.id
-    createdUserId = userId
-
     const { error: profileError } = await supabaseAdmin
       .from('profiles')
       .update({
         full_name: fullName,
         email,
         parent_role_id: 'mentor',
-        branch_id: branchId,
         status,
-        staff_source: 'internal',
+        branch_id: branchId,
       })
-      .eq('id', userId)
+      .eq('id', mentorId)
 
     if (profileError) {
-      await supabaseAdmin.auth.admin.deleteUser(userId)
       return NextResponse.json({ error: profileError.message }, { status: 400 })
     }
 
-    await supabaseAdmin.from('user_permission_profiles').delete().eq('user_id', userId)
+    await supabaseAdmin.from('user_permission_profiles').delete().eq('user_id', mentorId)
 
     const { error: permissionError } = await supabaseAdmin.from('user_permission_profiles').insert({
-      user_id: userId,
+      user_id: mentorId,
       profile_id: permissionProfile.id,
       is_primary: true,
     })
 
     if (permissionError) {
-      await supabaseAdmin.auth.admin.deleteUser(userId)
       return NextResponse.json({ error: permissionError.message }, { status: 400 })
     }
 
-    await supabaseAdmin.from('user_branch_assignments').delete().eq('user_id', userId)
+    await supabaseAdmin.from('user_branch_assignments').delete().eq('user_id', mentorId)
 
     const { error: branchError } = await supabaseAdmin.from('user_branch_assignments').insert({
-      user_id: userId,
+      user_id: mentorId,
       branch_id: branchId,
     })
 
     if (branchError) {
-      await supabaseAdmin.auth.admin.deleteUser(userId)
       return NextResponse.json({ error: branchError.message }, { status: 400 })
     }
 
-    const { error: mentorDetailsError } = await supabaseAdmin.from('mentor_details').insert({
-      profile_id: userId,
-      branch_id: branchId,
-      department_id: departmentId,
-      reports_to: reportsTo,
-      phone: phone || null,
-      joining_date: joiningDate || null,
-    })
+    const { error: mentorDetailsError } = existingDetails
+      ? await supabaseAdmin
+          .from('mentor_details')
+          .update({
+            department_id: departmentId,
+            reports_to: reportsTo,
+            phone: phone || null,
+            joining_date: joiningDate || null,
+          })
+          .eq('profile_id', mentorId)
+      : await supabaseAdmin.from('mentor_details').insert({
+          profile_id: mentorId,
+          branch_id: branchId,
+          department_id: departmentId,
+          reports_to: reportsTo,
+          phone: phone || null,
+          joining_date: joiningDate || null,
+        })
 
     if (mentorDetailsError) {
-      await supabaseAdmin.auth.admin.deleteUser(userId)
       return NextResponse.json({ error: mentorDetailsError.message }, { status: 400 })
     }
 
     return NextResponse.json({
       success: true,
-      message: 'Mentor created successfully.',
-      profileId: userId,
-      email,
-      temporaryPassword,
+      message: 'Mentor updated successfully.',
     })
   } catch {
-    if (createdUserId) {
-      await supabaseAdmin.auth.admin.deleteUser(createdUserId)
-    }
-
     return NextResponse.json(
-      { error: 'Something went wrong while creating mentor.' },
+      { error: 'Something went wrong while updating mentor.' },
       { status: 500 },
     )
   }

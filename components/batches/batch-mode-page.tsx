@@ -21,6 +21,55 @@ type BatchMode = 'online' | 'offline'
 type BatchStatus = 'active' | 'inactive' | 'completed'
 type ClassDayType = 'weekdays' | 'weekend' | 'custom'
 
+type BatchModePageProps = {
+  fixedMode: BatchMode
+}
+
+const MODE_COPY = {
+  online: {
+    lockedTitle: 'Online Batches Locked',
+    pageTitle: 'Online Batches',
+    subtitle:
+      'View and manage online batches with class days, timing, maximum seats, and online class links.',
+    createButton: 'Create Online Batch',
+    createModalTitle: 'Create Online Batch',
+    createModalSubtitle:
+      'Create an online batch with department, course, HOD, trainer, and auto-generated batch code.',
+    createSubmit: 'Create Online Batch',
+    listTitle: 'Online Batch List',
+    emptyList: 'No online batches found.',
+    statTotal: 'Total Online',
+    statTotalHelper: 'Total online batches',
+    statActive: 'Active Online Batches',
+    statCompleted: 'Completed Online',
+    successPrefix: 'Online batch created successfully',
+    modeLabel: 'Online',
+    namePlaceholder: 'Example: Online Digital Marketing Batch',
+    descriptionPlaceholder: 'Short description about this online batch',
+  },
+  offline: {
+    lockedTitle: 'Onsite Batches Locked',
+    pageTitle: 'Onsite Batches',
+    subtitle:
+      'View and manage onsite batches with class days, timing, and maximum seats.',
+    createButton: 'Create Onsite Batch',
+    createModalTitle: 'Create Onsite Batch',
+    createModalSubtitle:
+      'Create an onsite batch with department, course, HOD, trainer, and auto-generated batch code.',
+    createSubmit: 'Create Onsite Batch',
+    listTitle: 'Onsite Batch List',
+    emptyList: 'No onsite batches found.',
+    statTotal: 'Total Onsite',
+    statTotalHelper: 'Total onsite batches',
+    statActive: 'Active Onsite Batches',
+    statCompleted: 'Completed Onsite',
+    successPrefix: 'Onsite batch created successfully',
+    modeLabel: BATCH_MODE_ONSITE_LABEL,
+    namePlaceholder: 'Example: Onsite Website Development Batch',
+    descriptionPlaceholder: 'Short description about this onsite batch',
+  },
+} as const
+
 async function getAccessToken() {
   const supabase = createClient()
   const { data } = await supabase.auth.getSession()
@@ -66,93 +115,54 @@ const optionClass = 'bg-[#111111] text-white'
 const courseTypeOptions: {
   value: CourseType
   label: string
-  durationMonths: number
   helper: string
 }[] = [
-  {
-    value: 'professional',
-    label: 'Professional',
-    durationMonths: 1,
-    helper: '1 Month',
-  },
-  {
-    value: 'advanced',
-    label: 'Advanced',
-    durationMonths: 2,
-    helper: '2 Months',
-  },
-  {
-    value: 'basic',
-    label: 'Basic',
-    durationMonths: 4,
-    helper: '4 Months',
-  },
+  { value: 'professional', label: 'Professional', helper: '1 Month' },
+  { value: 'advanced', label: 'Advanced', helper: '2 Months' },
+  { value: 'basic', label: 'Basic', helper: '4 Months' },
 ]
 
-const classDayOptions: {
-  value: ClassDayType
-  label: string
-}[] = [
-  {
-    value: 'weekdays',
-    label: 'Monday to Friday',
-  },
-  {
-    value: 'weekend',
-    label: 'Saturday and Sunday',
-  },
-  {
-    value: 'custom',
-    label: 'Custom Days',
-  },
+const classDayOptions: { value: ClassDayType; label: string }[] = [
+  { value: 'weekdays', label: 'Monday to Friday' },
+  { value: 'weekend', label: 'Saturday and Sunday' },
+  { value: 'custom', label: 'Custom Days' },
 ]
 
-const getCourseTypeLabel = (courseType: CourseType) => {
-  return courseTypeOptions.find((item) => item.value === courseType)?.label || 'Professional'
-}
+const getCourseTypeLabel = (courseType: CourseType) =>
+  courseTypeOptions.find((item) => item.value === courseType)?.label || 'Professional'
 
 const getDurationFromCourseType = (courseType: CourseType) => durationMonthsByType[courseType]
 
-const getClassDayLabel = (classDayType: ClassDayType) => {
-  return classDayOptions.find((item) => item.value === classDayType)?.label || 'Monday to Friday'
-}
+const getClassDayLabel = (classDayType: ClassDayType) =>
+  classDayOptions.find((item) => item.value === classDayType)?.label || 'Monday to Friday'
 
 const formatTimeLabel = (timeValue: string | null) => {
   if (!timeValue) return 'No time'
-
   const [hourValue, minuteValue] = timeValue.split(':')
   const hour = Number(hourValue)
   const minute = Number(minuteValue || '0')
-
   if (Number.isNaN(hour)) return timeValue
-
   const period = hour >= 12 ? 'PM' : 'AM'
   const hour12 = hour % 12 || 12
-
   return `${hour12}:${String(minute).padStart(2, '0')} ${period}`
 }
 
 const getYearFromDate = (dateValue: string | null) => {
   if (!dateValue) return ''
-
   const date = new Date(`${dateValue}T00:00:00`)
-
   if (Number.isNaN(date.getTime())) return ''
-
   return String(date.getFullYear())
 }
 
 const getMonthFromDate = (dateValue: string | null) => {
   if (!dateValue) return ''
-
   const date = new Date(`${dateValue}T00:00:00`)
-
   if (Number.isNaN(date.getTime())) return ''
-
   return String(date.getMonth() + 1)
 }
 
-export default function Page() {
+export function BatchModePage({ fixedMode }: BatchModePageProps) {
+  const copy = MODE_COPY[fixedMode]
   const { user, can } = useAuth()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
@@ -169,15 +179,18 @@ export default function Page() {
   const { departments, loading: departmentsLoading } = useDepartmentList()
   const { mentors, loading: mentorsLoading } = useMentorDirectory()
 
+  const modeBatches = useMemo(
+    () => batches.filter((batch) => batch.batch_mode === fixedMode),
+    [batches, fixedMode],
+  )
+
   const [filterCourseType, setFilterCourseType] = useState('all')
   const [filterCourse, setFilterCourse] = useState('all')
-  const [filterMode, setFilterMode] = useState('all')
   const [filterStaff, setFilterStaff] = useState('all')
   const [filterYear, setFilterYear] = useState('all')
   const [filterMonth, setFilterMonth] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterStartTime, setFilterStartTime] = useState('all')
-  const [filterDuration, setFilterDuration] = useState('all')
   const [isModalOpen, setIsModalOpen] = useState(false)
 
   const [courseType, setCourseType] = useState<CourseType>('professional')
@@ -186,13 +199,10 @@ export default function Page() {
   const [description, setDescription] = useState('')
   const [courseId, setCourseId] = useState('')
   const [academicLeadId, setAcademicLeadId] = useState('')
-  const [academicLeadTitle, setAcademicLeadTitle] = useState('HOD')
   const [supportMentorId, setSupportMentorId] = useState('')
-  const [supportMentorTitle, setSupportMentorTitle] = useState('Trainer')
   const [durationMonths, setDurationMonths] = useState('1')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [batchMode, setBatchMode] = useState<BatchMode>('offline')
   const [classDayType, setClassDayType] = useState<ClassDayType>('weekdays')
   const [batchStartTime, setBatchStartTime] = useState('07:00')
   const [batchEndTime, setBatchEndTime] = useState('09:00')
@@ -206,8 +216,7 @@ export default function Page() {
 
   const canCreateBatch = can('batches.create')
   const canEditBatch = can('batches.edit')
-  const canAssignBatchStaff = can('batches.assign')
-  const canManageBatches = canCreateBatch || canEditBatch || canAssignBatchStaff
+  const canManageBatches = canCreateBatch || canEditBatch || can('batches.assign')
   const hasManagementBatchAccess = canManageBatches
 
   const hodOptions = useMemo(
@@ -226,11 +235,7 @@ export default function Page() {
   )
 
   const staffFilterOptions = useMemo(
-    () =>
-      mentors.map((mentor) => ({
-        id: mentor.id,
-        name: mentor.full_name,
-      })),
+    () => mentors.map((mentor) => ({ id: mentor.id, name: mentor.full_name })),
     [mentors],
   )
 
@@ -253,11 +258,11 @@ export default function Page() {
     return previewBatchCode({
       branchCode: activeBranch?.code || '',
       departmentCode: selectedCourse.department_code || '',
-      mode: batchMode,
+      mode: fixedMode,
       startDate,
-      existingCodes: batches.map((batch) => batch.batch_code || '').filter(Boolean),
+      existingCodes: modeBatches.map((batch) => batch.batch_code || '').filter(Boolean),
     })
-  }, [activeBranch?.code, batchMode, batches, selectedCourse, startDate])
+  }, [activeBranch?.code, fixedMode, modeBatches, selectedCourse, startDate])
 
   const canCurrentUserSeeBatch = (batch: BatchListRow) => {
     if (hasManagementBatchAccess) return true
@@ -270,7 +275,7 @@ export default function Page() {
   }
 
   const filteredBatches = useMemo(() => {
-    return batches.filter((batch) => {
+    return modeBatches.filter((batch) => {
       if (!canCurrentUserSeeBatch(batch)) return false
 
       const enrolledCount = batch.enrolled_count || 0
@@ -278,84 +283,72 @@ export default function Page() {
       const derivedStatus = maxSeatCount > 0 && enrolledCount >= maxSeatCount ? 'completed' : batch.status
       const batchYear = getYearFromDate(batch.start_date)
       const batchMonth = getMonthFromDate(batch.start_date)
-      const durationValue = batch.duration_months ? String(batch.duration_months) : ''
       const matchesStaff =
-        filterStaff === 'all' || batch.staff_assignments.some((assignment) => assignment.staff_id === filterStaff)
+        filterStaff === 'all' ||
+        batch.staff_assignments.some((assignment) => assignment.staff_id === filterStaff)
 
       return (
         (filterCourseType === 'all' || batch.course_type === filterCourseType) &&
         (filterCourse === 'all' || batch.course_id === filterCourse) &&
-        (filterMode === 'all' || batch.batch_mode === filterMode) &&
         matchesStaff &&
         (filterYear === 'all' || batchYear === filterYear) &&
         (filterMonth === 'all' || batchMonth === filterMonth) &&
         (filterStatus === 'all' || derivedStatus === filterStatus) &&
-        (filterStartTime === 'all' || batch.batch_start_time === filterStartTime) &&
-        (filterDuration === 'all' || durationValue === filterDuration)
+        (filterStartTime === 'all' || batch.batch_start_time === filterStartTime)
       )
     })
   }, [
-    batches,
+    modeBatches,
     filterCourseType,
     filterCourse,
-    filterMode,
     filterStaff,
     filterYear,
     filterMonth,
     filterStatus,
     filterStartTime,
-    filterDuration,
     hasManagementBatchAccess,
     user?.id,
   ])
 
-  const yearOptions = useMemo(() => {
-    return Array.from(
-      new Set(batches.map((batch) => getYearFromDate(batch.start_date)).filter(Boolean))
-    ).sort((a, b) => Number(b) - Number(a))
-  }, [batches])
+  const yearOptions = useMemo(
+    () =>
+      Array.from(new Set(modeBatches.map((batch) => getYearFromDate(batch.start_date)).filter(Boolean))).sort(
+        (a, b) => Number(b) - Number(a),
+      ),
+    [modeBatches],
+  )
 
-  const monthOptions = useMemo(() => {
-    return Array.from(
-      new Set(batches.map((batch) => getMonthFromDate(batch.start_date)).filter(Boolean))
-    ).sort((a, b) => Number(a) - Number(b))
-  }, [batches])
+  const monthOptions = useMemo(
+    () =>
+      Array.from(new Set(modeBatches.map((batch) => getMonthFromDate(batch.start_date)).filter(Boolean))).sort(
+        (a, b) => Number(a) - Number(b),
+      ),
+    [modeBatches],
+  )
 
-  const startTimeOptions = useMemo(() => {
-    return Array.from(
-      new Set(batches.map((batch) => batch.batch_start_time).filter(Boolean) as string[])
-    ).sort()
-  }, [batches])
-
-  const durationOptions = useMemo(() => {
-    return Array.from(
-      new Set(
-        batches
-          .map((batch) => (batch.duration_months ? String(batch.duration_months) : ''))
-          .filter(Boolean)
-      )
-    ).sort((a, b) => Number(a) - Number(b))
-  }, [batches])
+  const startTimeOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(modeBatches.map((batch) => batch.batch_start_time).filter(Boolean) as string[]),
+      ).sort(),
+    [modeBatches],
+  )
 
   const activeCount = filteredBatches.filter((batch) => batch.status === 'active').length
-  const inactiveCount = filteredBatches.filter((batch) => batch.status === 'inactive').length
   const completedCount = filteredBatches.filter((batch) => {
     const enrolled = batch.enrolled_count || 0
     const max = batch.max_seats || 0
-
     return batch.status === 'completed' || (max > 0 && enrolled >= max)
   }).length
 
   const resetFilters = () => {
     setFilterCourseType('all')
     setFilterCourse('all')
-    setFilterMode('all')
     setFilterStaff('all')
     setFilterYear('all')
     setFilterMonth('all')
     setFilterStatus('all')
     setFilterStartTime('all')
-    setFilterDuration('all')
   }
 
   const resetForm = () => {
@@ -373,13 +366,10 @@ export default function Page() {
     setDescription('')
     setCourseId(firstCourse?.id || '')
     setAcademicLeadId(hodOptions[0]?.id || '')
-    setAcademicLeadTitle('HOD')
     setSupportMentorId(trainerOptions[0]?.id || '')
-    setSupportMentorTitle('Trainer')
     setDurationMonths(String(getDurationFromCourseType(defaultType)))
     setStartDate('')
     setEndDate('')
-    setBatchMode('offline')
     setClassDayType('weekdays')
     setBatchStartTime('07:00')
     setBatchEndTime('09:00')
@@ -427,7 +417,6 @@ export default function Page() {
 
   const updateCourse = (selectedCourseId: string) => {
     const course = courses.find((item) => item.id === selectedCourseId)
-
     setCourseId(selectedCourseId)
 
     if (course) {
@@ -436,10 +425,6 @@ export default function Page() {
       setDurationMonths(String(course.duration_months))
       setName(`${course.name} Batch`)
     }
-  }
-
-  const updateStartDate = (value: string) => {
-    setStartDate(value)
   }
 
   const handleSubmitBatch = async (e: FormEvent<HTMLFormElement>) => {
@@ -484,14 +469,8 @@ export default function Page() {
       return
     }
 
-    if (!startDate) {
-      setError('Please select batch start date.')
-      setLoading(false)
-      return
-    }
-
-    if (!endDate) {
-      setError('Please select batch end date.')
+    if (!startDate || !endDate) {
+      setError('Please select batch start date and end date.')
       setLoading(false)
       return
     }
@@ -503,7 +482,6 @@ export default function Page() {
     }
 
     const seatCount = Number(maxSeats)
-
     if (!seatCount || seatCount < 1) {
       setError('Maximum seats should be at least 1.')
       setLoading(false)
@@ -511,7 +489,6 @@ export default function Page() {
     }
 
     const course = courses.find((item) => item.id === courseId)
-
     if (!course) {
       setError('Selected course not found.')
       setLoading(false)
@@ -531,7 +508,6 @@ export default function Page() {
     }
 
     const token = await getAccessToken()
-
     if (!token) {
       setError('Session expired. Please login again.')
       setLoading(false)
@@ -547,7 +523,7 @@ export default function Page() {
         trainer_id: supportMentorId,
         start_date: startDate,
         end_date: endDate,
-        batch_mode: batchMode,
+        batch_mode: fixedMode,
         class_day_type: classDayType,
         batch_start_time: batchStartTime,
         batch_end_time: batchEndTime,
@@ -565,7 +541,7 @@ export default function Page() {
       return
     }
 
-    setMessage(`Batch created successfully. Batch ID: ${result.batchCode}`)
+    setMessage(`${copy.successPrefix}. Batch ID: ${result.batchCode}`)
     setLoading(false)
     setIsModalOpen(false)
     resetForm()
@@ -575,10 +551,8 @@ export default function Page() {
   if (!can('batches.view')) {
     return (
       <div className="border border-border bg-transparent p-8">
-        <h1 className="text-2xl font-bold">Batches Locked</h1>
-        <p className="mt-2 text-muted-foreground">
-          Your current permission cannot view batches.
-        </p>
+        <h1 className="text-2xl font-bold">{copy.lockedTitle}</h1>
+        <p className="mt-2 text-muted-foreground">Your current permission cannot view batches.</p>
       </div>
     )
   }
@@ -589,11 +563,9 @@ export default function Page() {
         <CardContent className="p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p className="text-sm font-semibold text-[#153e90] dark:text-[#6ee75a]">Permission Based Batch Management</p>
-              <h1 className="mt-2 text-3xl font-bold">Batches</h1>
-              <p className="mt-3 max-w-4xl text-muted-foreground">
-                Create and manage online/onsite batches with HOD and trainer assignments. Batch codes are generated automatically from branch, department, mode, and start date.
-              </p>
+              <p className="text-sm font-semibold text-[#153e90] dark:text-[#6ee75a]">Batch Management</p>
+              <h1 className="mt-2 text-3xl font-bold">{copy.pageTitle}</h1>
+              <p className="mt-3 max-w-4xl text-muted-foreground">{copy.subtitle}</p>
               <p className="mt-2 text-xs text-muted-foreground">
                 Branch:{' '}
                 <span className="font-semibold text-foreground">
@@ -610,7 +582,7 @@ export default function Page() {
                 className="bg-[#153e90] text-white hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#5dd84a]"
               >
                 <CustomIcon icon="patch.svg" folder={iconFolder} alt="Create" className="mr-2 h-4 w-4" />
-                Create Batch
+                {copy.createButton}
               </Button>
             )}
           </div>
@@ -624,9 +596,7 @@ export default function Page() {
       )}
 
       {error && (
-        <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-          {error}
-        </div>
+        <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</div>
       )}
 
       {message && (
@@ -638,26 +608,25 @@ export default function Page() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <Card className="border border-border bg-transparent">
           <CardContent className="p-3">
-            <p className="text-sm uppercase text-muted-foreground">Total Batches</p>
+            <p className="text-sm uppercase text-muted-foreground">{copy.statTotal}</p>
             <p className="mt-3 text-4xl font-bold">{filteredBatches.length}</p>
-            <p className="mt-4 text-sm text-muted-foreground">Total number of batches</p>
+            <p className="mt-4 text-sm text-muted-foreground">{copy.statTotalHelper}</p>
           </CardContent>
         </Card>
 
         <Card className="border border-border bg-transparent">
           <CardContent className="p-3">
-            <p className="text-sm uppercase text-muted-foreground">Active Batches</p>
+            <p className="text-sm uppercase text-muted-foreground">{copy.statActive}</p>
             <p className="mt-3 text-4xl font-bold">{activeCount}</p>
             <p className="mt-4 text-sm text-muted-foreground">Currently running</p>
           </CardContent>
         </Card>
 
-
         <Card className="border border-border bg-transparent">
           <CardContent className="p-3">
-            <p className="text-sm uppercase text-muted-foreground">Completed Batches</p>
+            <p className="text-sm uppercase text-muted-foreground">{copy.statCompleted}</p>
             <p className="mt-3 text-4xl font-bold">{completedCount}</p>
-            <p className="mt-4 text-sm text-muted-foreground">Completed Batches</p>
+            <p className="mt-4 text-sm text-muted-foreground">Completed batches</p>
           </CardContent>
         </Card>
       </div>
@@ -677,42 +646,28 @@ export default function Page() {
             <select value={filterCourseType} onChange={(e) => setFilterCourseType(e.target.value)} className={selectClass}>
               <option value="all" className={optionClass}>All Course Types</option>
               {courseTypeOptions.map((type) => (
-                <option key={type.value} value={type.value} className={optionClass}>
-                  {type.label}
-                </option>
+                <option key={type.value} value={type.value} className={optionClass}>{type.label}</option>
               ))}
             </select>
 
             <select value={filterCourse} onChange={(e) => setFilterCourse(e.target.value)} className={selectClass}>
               <option value="all" className={optionClass}>All Courses</option>
               {courses.map((course) => (
-                <option key={course.id} value={course.id} className={optionClass}>
-                  {course.name}
-                </option>
+                <option key={course.id} value={course.id} className={optionClass}>{course.name}</option>
               ))}
-            </select>
-
-            <select value={filterMode} onChange={(e) => setFilterMode(e.target.value)} className={selectClass}>
-              <option value="all" className={optionClass}>All Modes</option>
-              <option value="online" className={optionClass}>Online</option>
-              <option value="offline" className={optionClass}>{BATCH_MODE_ONSITE_LABEL}</option>
             </select>
 
             <select value={filterStaff} onChange={(e) => setFilterStaff(e.target.value)} className={selectClass}>
               <option value="all" className={optionClass}>All Assigned Staff</option>
               {staffFilterOptions.map((staff) => (
-                <option key={staff.id} value={staff.id} className={optionClass}>
-                  {staff.name}
-                </option>
+                <option key={staff.id} value={staff.id} className={optionClass}>{staff.name}</option>
               ))}
             </select>
 
             <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)} className={selectClass}>
               <option value="all" className={optionClass}>All Years</option>
               {yearOptions.map((year) => (
-                <option key={year} value={year} className={optionClass}>
-                  {year}
-                </option>
+                <option key={year} value={year} className={optionClass}>{year}</option>
               ))}
             </select>
 
@@ -735,19 +690,16 @@ export default function Page() {
             <select value={filterStartTime} onChange={(e) => setFilterStartTime(e.target.value)} className={selectClass}>
               <option value="all" className={optionClass}>All Start Times</option>
               {startTimeOptions.map((time) => (
-                <option key={time} value={time} className={optionClass}>
-                  {formatTimeLabel(time)}
-                </option>
+                <option key={time} value={time} className={optionClass}>{formatTimeLabel(time)}</option>
               ))}
             </select>
-
           </div>
         </CardContent>
       </Card>
 
       <Card className="border border-border bg-transparent">
         <CardHeader>
-          <CardTitle>Batch List</CardTitle>
+          <CardTitle>{copy.listTitle}</CardTitle>
         </CardHeader>
 
         <CardContent>
@@ -757,7 +709,7 @@ export default function Page() {
             </div>
           ) : filteredBatches.length === 0 ? (
             <div className="border border-border bg-transparent p-6 text-sm text-muted-foreground">
-              No batches found for the selected filters or permission scope.
+              {copy.emptyList}
             </div>
           ) : (
             <div className="space-y-4">
@@ -773,17 +725,14 @@ export default function Page() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-3">
                           <h3 className="text-xl font-bold">{batch.name}</h3>
-
                           {batch.batch_code && (
                             <span className="border border-border px-2 py-1 text-xs text-muted-foreground">
                               {batch.batch_code}
                             </span>
                           )}
-
                           <span className="border border-border px-2 py-1 text-xs font-medium capitalize">
                             {getCourseTypeLabel(batch.course_type)}
                           </span>
-
                           <span
                             className={
                               displayStatus === 'active'
@@ -797,65 +746,52 @@ export default function Page() {
                           </span>
                         </div>
 
-                        <p className="mt-3 text-muted-foreground">{batch.description || 'No description'}</p>
-
                         <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
                           <p>
                             <span className="text-muted-foreground">Department:</span>{' '}
                             <span className="font-medium">{batch.department_name}</span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Course:</span>{' '}
                             <span className="font-medium">{batch.course_name}</span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Branch:</span>{' '}
                             <span className="font-medium">{batch.branch_name}</span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Mode:</span>{' '}
-                            <span className="font-medium">
-                              {batch.batch_mode === 'online' ? 'Online' : BATCH_MODE_ONSITE_LABEL}
-                            </span>
+                            <span className="font-medium">{copy.modeLabel}</span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Class Days:</span>{' '}
                             <span className="font-medium">{getClassDayLabel(batch.class_day_type)}</span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Time:</span>{' '}
                             <span className="font-medium">
                               {formatTimeLabel(batch.batch_start_time)} to {formatTimeLabel(batch.batch_end_time)}
                             </span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Duration:</span>{' '}
                             <span className="font-medium">
                               {batch.duration_months} {batch.duration_months === 1 ? 'month' : 'months'}
                             </span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Dates:</span>{' '}
                             <span className="font-medium">
                               {batch.start_date} to {batch.end_date}
                             </span>
                           </p>
-
                           <p>
                             <span className="text-muted-foreground">Seats:</span>{' '}
                             <span className="font-medium">
                               {enrolledCount}/{maxSeatCount || 0}
                             </span>
                           </p>
-
-                          {batch.batch_mode === 'online' && (
+                          {fixedMode === 'online' && (
                             <p className="sm:col-span-2 xl:col-span-4">
                               <span className="text-muted-foreground">Online Link:</span>{' '}
                               <span className="font-medium">
@@ -864,8 +800,6 @@ export default function Page() {
                             </p>
                           )}
                         </div>
-
-                  
                       </div>
 
                       <div className="flex flex-wrap gap-3 xl:justify-end">
@@ -875,7 +809,6 @@ export default function Page() {
                             View More
                           </Link>
                         </Button>
-
                         {canEditBatch && (
                           <Button type="button">
                             <CustomIcon icon="submissions.svg" folder={iconFolder} alt="Edit" className="mr-2 h-4 w-4" />
@@ -897,12 +830,9 @@ export default function Page() {
           <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto border border-border bg-card">
             <div className="flex items-center justify-between border-b border-border p-6">
               <div>
-                <h2 className="text-2xl font-bold">Create Batch</h2>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Create a batch with academic lead and student support mentor hierarchy.
-                </p>
+                <h2 className="text-2xl font-bold">{copy.createModalTitle}</h2>
+                <p className="mt-2 text-sm text-muted-foreground">{copy.createModalSubtitle}</p>
               </div>
-
               <button type="button" onClick={() => setIsModalOpen(false)} className="border border-border px-3 py-2 text-sm">
                 Close
               </button>
@@ -923,12 +853,7 @@ export default function Page() {
 
                 <div>
                   <label className="mb-2 block text-sm font-medium">Department</label>
-                  <select
-                    value={departmentId}
-                    onChange={(e) => updateDepartment(e.target.value)}
-                    className={selectClass}
-                    required
-                  >
+                  <select value={departmentId} onChange={(e) => updateDepartment(e.target.value)} className={selectClass} required>
                     <option value="" className={optionClass}>Select department</option>
                     {departments.map((department) => (
                       <option key={department.id} value={department.id} className={optionClass}>
@@ -944,9 +869,7 @@ export default function Page() {
                   <select value={courseId} onChange={(e) => updateCourse(e.target.value)} className={selectClass} required>
                     <option value="" className={optionClass}>Select course</option>
                     {filteredCoursesByType.map((course) => (
-                      <option key={course.id} value={course.id} className={optionClass}>
-                        {course.name}
-                      </option>
+                      <option key={course.id} value={course.id} className={optionClass}>{course.name}</option>
                     ))}
                   </select>
                 </div>
@@ -956,60 +879,25 @@ export default function Page() {
                   <select value={academicLeadId} onChange={(e) => setAcademicLeadId(e.target.value)} className={selectClass} required>
                     <option value="" className={optionClass}>Select HOD</option>
                     {hodOptions.map((staff) => (
-                      <option key={staff.id} value={staff.id} className={optionClass}>
-                        {staff.full_name}
-                      </option>
+                      <option key={staff.id} value={staff.id} className={optionClass}>{staff.full_name}</option>
                     ))}
                   </select>
                 </div>
-
-    
 
                 <div>
                   <label className="mb-2 block text-sm font-medium">Trainer</label>
                   <select value={supportMentorId} onChange={(e) => setSupportMentorId(e.target.value)} className={selectClass} required>
                     <option value="" className={optionClass}>Select trainer</option>
                     {trainerOptions.map((staff) => (
-                      <option key={staff.id} value={staff.id} className={optionClass}>
-                        {staff.full_name}
-                      </option>
+                      <option key={staff.id} value={staff.id} className={optionClass}>{staff.full_name}</option>
                     ))}
                   </select>
                 </div>
 
-              
-
-                {/* <div className="md:col-span-2">
-                  <div className="border border-border bg-background/40 p-4">
-                    <h3 className="font-bold">Hierarchy Preview</h3>
-                    <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_1fr] md:items-center">
-                      <div className="border border-border bg-card p-4">
-                        <p className="font-bold">{getStaffName(academicLeadId)}</p>
-                        <p className="mt-1 text-sm text-muted-foreground">{academicLeadTitle || 'Academic Lead'}</p>
-                        <p className="mt-3 text-xs text-muted-foreground">Can view staff under them and review academic quality.</p>
-                      </div>
-
-                      <div className="text-center text-sm font-semibold text-muted-foreground">supervises</div>
-
-                      <div className="border border-border bg-card p-4">
-                        <p className="font-bold">{getStaffName(supportMentorId)}</p>
-                        <p className="mt-1 text-sm text-muted-foreground">{supportMentorTitle || 'Student Support Mentor'}</p>
-                        <p className="mt-3 text-xs text-muted-foreground">Reports to {getStaffName(academicLeadId)} for this batch.</p>
-                      </div>
-                    </div>
-                  </div>
-                </div> */}
-
-                {/* <div>
-                  <label className="mb-2 block text-sm font-medium">Branch</label>
-                  <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className={selectClass} required>
-                    {branches.map((branch) => (
-                      <option key={branch.id} value={branch.id} className={optionClass}>
-                        {branch.name}
-                      </option>
-                    ))}
-                  </select>
-                </div> */}
+                <div>
+                  <label className="mb-2 block text-sm font-medium">Mode</label>
+                  <input value={copy.modeLabel} className={inputClass} readOnly />
+                </div>
 
                 <div>
                   <label className="mb-2 block text-sm font-medium">Batch Duration</label>
@@ -1032,17 +920,17 @@ export default function Page() {
 
                 <div className="md:col-span-2">
                   <label className="mb-2 block text-sm font-medium">Batch Name</label>
-                  <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="Example: Digital Marketing Morning Batch" required />
+                  <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder={copy.namePlaceholder} required />
                 </div>
 
                 <div className="md:col-span-2">
                   <label className="mb-2 block text-sm font-medium">Description</label>
-                  <textarea value={description} onChange={(e) => setDescription(e.target.value)} className={textareaClass} placeholder="Short description about this batch" rows={3} />
+                  <textarea value={description} onChange={(e) => setDescription(e.target.value)} className={textareaClass} placeholder={copy.descriptionPlaceholder} rows={3} />
                 </div>
 
                 <div>
                   <label className="mb-2 block text-sm font-medium">Batch Start Date</label>
-                  <input type="date" value={startDate} onChange={(e) => updateStartDate(e.target.value)} className={inputClass} required />
+                  <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputClass} required />
                 </div>
 
                 <div>
@@ -1050,23 +938,11 @@ export default function Page() {
                   <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputClass} required />
                 </div>
 
-                <div>
-                  <label className="mb-2 block text-sm font-medium">Online / {BATCH_MODE_ONSITE_LABEL} Mode</label>
-                  <select value={batchMode} onChange={(e) => setBatchMode(e.target.value as BatchMode)} className={selectClass} required>
-                    <option value="online" className={optionClass}>Online</option>
-                    <option value="offline" className={optionClass}>{BATCH_MODE_ONSITE_LABEL}</option>
-                  </select>
-                </div>
-
                 <div className="md:col-span-2">
                   <label className="mb-2 block text-sm font-medium">Batch Code Preview</label>
-                  <input
-                    value={batchCodePreview || 'Select course, mode, and start date'}
-                    className={inputClass}
-                    readOnly
-                  />
+                  <input value={batchCodePreview || 'Select course and start date'} className={inputClass} readOnly />
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Format: branch + department + ON/OS + MMYY + B series (example: KOCWDON0626B2).
+                    Format: branch + department + ON/OS + MMYY + B series.
                     Branch: {activeBranch?.code || '—'} · Department: {selectedCourse?.department_name || '—'} ({selectedCourse?.department_code || '—'})
                   </p>
                 </div>
@@ -1075,9 +951,7 @@ export default function Page() {
                   <label className="mb-2 block text-sm font-medium">Class Days</label>
                   <select value={classDayType} onChange={(e) => setClassDayType(e.target.value as ClassDayType)} className={selectClass} required>
                     {classDayOptions.map((item) => (
-                      <option key={item.value} value={item.value} className={optionClass}>
-                        {item.label}
-                      </option>
+                      <option key={item.value} value={item.value} className={optionClass}>{item.label}</option>
                     ))}
                   </select>
                 </div>
@@ -1092,26 +966,22 @@ export default function Page() {
                   <input type="time" value={batchEndTime} onChange={(e) => setBatchEndTime(e.target.value)} className={inputClass} required />
                 </div>
 
-                {batchMode === 'online' && (
+                {fixedMode === 'online' && (
                   <div className="md:col-span-2">
                     <label className="mb-2 block text-sm font-medium">Online Class Link</label>
-                    <input
-                      value={classLink}
-                      onChange={(e) => setClassLink(e.target.value)}
-                      className={inputClass}
-                      placeholder="Zoom / Google Meet / YouTube link"
-                    />
+                    <input value={classLink} onChange={(e) => setClassLink(e.target.value)} className={inputClass} placeholder="Zoom / Google Meet link" />
                   </div>
                 )}
               </div>
 
-              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-                <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
-                  Cancel
-                </Button>
+              {error && (
+                <div className="mt-4 border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</div>
+              )}
 
+              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+                <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={loading} className="bg-[#153e90] text-white hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#5dd84a]">
-                  {loading ? 'Creating...' : 'Create Batch'}
+                  {loading ? 'Creating...' : copy.createSubmit}
                 </Button>
               </div>
             </form>
