@@ -21,6 +21,7 @@ const ActiveBranchContext = createContext<ActiveBranchContextValue | null>(null)
 export function ActiveBranchProvider({ children }: { children: React.ReactNode }) {
   const { user, role, parentRoleId, can } = useAuth()
   const { branches: branchNavItems, loading: branchesLoading } = useBranchNav()
+  const isStudent = parentRoleId === 'student'
 
   const [activeBranchId, setActiveBranchIdState] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
@@ -58,6 +59,14 @@ export function ActiveBranchProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (!hydrated || !allowedBranches.length) return
 
+    if (isStudent && user?.branchId && user.branchId !== 'all') {
+      const studentBranch = allowedBranches.find((branch) => branch.id === user.branchId)
+      if (studentBranch && activeBranchId !== studentBranch.id) {
+        setActiveBranchId(studentBranch.id)
+      }
+      return
+    }
+
     const isValid = activeBranchId
       ? allowedBranches.some((branch) => branch.id === activeBranchId)
       : false
@@ -65,7 +74,7 @@ export function ActiveBranchProvider({ children }: { children: React.ReactNode }
     if (!isValid) {
       setActiveBranchId(allowedBranches[0].id)
     }
-  }, [activeBranchId, allowedBranches, hydrated, setActiveBranchId])
+  }, [activeBranchId, allowedBranches, hydrated, isStudent, setActiveBranchId, user?.branchId])
 
   const activeBranch = useMemo(() => {
     if (!activeBranchId) return allowedBranches[0] || null

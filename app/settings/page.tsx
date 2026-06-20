@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import {
   Card,
@@ -18,10 +18,16 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { User, Bell, Shield, Palette } from 'lucide-react'
 import { useDemoAuth } from '@/lib/demo/auth'
+import { fetchMyMentorRatingSummary, type MentorRatingSummary } from '@/lib/data/mentor-ratings'
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme()
-  const { user, role } = useDemoAuth()
+  const { user, role, parentRoleId, can } = useDemoAuth()
+
+  const [ratingSummary, setRatingSummary] = useState<MentorRatingSummary | null>(null)
+  const [ratingLoading, setRatingLoading] = useState(false)
+
+  const isMentorProfile = parentRoleId === 'mentor' && can('ratings.view')
 
   const [fullName, setFullName] = useState(user?.fullName || 'Demo User')
   const [email, setEmail] = useState(user?.email || 'demo@getskill.local')
@@ -51,6 +57,31 @@ export default function SettingsPage() {
       .join('')
       .slice(0, 2)
       .toUpperCase() || 'U'
+
+  useEffect(() => {
+    if (!isMentorProfile) {
+      setRatingSummary(null)
+      return
+    }
+
+    let cancelled = false
+
+    async function loadRatingSummary() {
+      setRatingLoading(true)
+      const result = await fetchMyMentorRatingSummary()
+
+      if (!cancelled) {
+        setRatingSummary(result.data)
+        setRatingLoading(false)
+      }
+    }
+
+    void loadRatingSummary()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isMentorProfile])
 
   const handleSaveProfile = async () => {
     setSavingProfile(true)
@@ -233,6 +264,48 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+
+          {isMentorProfile && (
+            <Card className="w-full border border-border bg-card">
+              <CardHeader>
+                <CardTitle>Student Rating Summary</CardTitle>
+                <CardDescription>
+                  Anonymous star ratings from your assigned students. Individual student names are not shown.
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="space-y-5">
+                {ratingLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading rating summary…</p>
+                ) : (
+                  <>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="border border-border bg-background/60 p-4">
+                        <div className="text-xs text-muted-foreground">Average Rating</div>
+                        <div className="mt-2 text-3xl font-bold">{ratingSummary?.averageRating || '—'}</div>
+                      </div>
+                      <div className="border border-border bg-background/60 p-4">
+                        <div className="text-xs text-muted-foreground">Total Ratings</div>
+                        <div className="mt-2 text-3xl font-bold">{ratingSummary?.totalRatings || 0}</div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-sm font-semibold">Rating Distribution</div>
+                      <div className="mt-3 space-y-2">
+                        {[5, 4, 3, 2, 1].map((star) => (
+                          <div key={star} className="flex items-center justify-between border border-border bg-background/60 px-3 py-2 text-sm">
+                            <span>{star} star{star === 1 ? '' : 's'}</span>
+                            <span className="font-semibold">{ratingSummary?.distribution[String(star)] || 0}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="notifications" className="space-y-6">

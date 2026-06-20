@@ -1,18 +1,17 @@
 'use client'
 
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
 import {
-  deleteTask,
   fetchStudentIdByProfileId,
   fetchTaskById,
-  getStudentTaskSubmitHref,
   isTaskSubmissionClosed,
   openTaskBriefFile,
+  submitTask,
   type TaskListRow,
 } from '@/lib/data/tasks'
 import { createClient } from '@/lib/supabase/client'
@@ -41,9 +40,10 @@ async function getAccessToken() {
   return data.session?.access_token || null
 }
 
-export default function TaskDetailPage() {
+export default function TaskSubmitPage() {
   const params = useParams()
-  const taskId = String(params.id || '')
+  const router = useRouter()
+  const taskId = String(params.taskId || '')
   const { can, user, parentRoleId } = useAuth()
   const { activeBranchId, loading: branchLoading } = useBranchScope()
 
@@ -51,6 +51,9 @@ export default function TaskDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [studentNote, setStudentNote] = useState('')
+  const [submissionFile, setSubmissionFile] = useState<File | null>(null)
 
   const isStudent = isStudentMyCoursesView(parentRoleId)
 
@@ -112,11 +115,28 @@ export default function TaskDetailPage() {
   const displayStatus = useMemo(() => {
     if (!task) return ''
     const closed = isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed'
-    return closed ? 'Submission Closed' : task.status
+    if (closed) return 'Submission Closed'
+    if (task.studentSubmitted) return 'Submitted'
+    return task.status
   }, [task])
 
-  const handleDelete = async () => {
+  const closed = useMemo(() => {
+    if (!task) return false
+    return isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed'
+  }, [task])
+
+  const handleSubmit = async () => {
     if (!task) return
+
+    if (closed) {
+      setNotice('Submission is closed for this task.')
+      return
+    }
+
+    if (task.studentSubmitted && task.studentSubmissionId) {
+      router.push(`/task-submissions/${task.studentSubmissionId}`)
+      return
+    }
 
     const accessToken = await getAccessToken()
 
@@ -125,14 +145,26 @@ export default function TaskDetailPage() {
       return
     }
 
-    const result = await deleteTask(task.id, accessToken)
+    setSubmitting(true)
+    setNotice('')
+
+    const result = await submitTask(task.id, accessToken, {
+      studentNote: studentNote.trim(),
+      submissionFile,
+    })
+    setSubmitting(false)
 
     if (!result.ok) {
-      setNotice(result.error || 'Failed to delete task.')
+      setNotice(result.error || 'Failed to submit task.')
       return
     }
 
-    window.location.href = '/tasks'
+    if (result.submissionId) {
+      router.push(`/task-submissions/${result.submissionId}`)
+      return
+    }
+
+    router.push('/task-submissions')
   }
 
   const handleBriefAction = async (mode: 'view' | 'download') => {
@@ -152,18 +184,34 @@ export default function TaskDetailPage() {
     }
   }
 
-  if (!can('tasks.view')) {
+  if (!isStudent) {
+    return (
+      <div className="space-y-4">
+        <Link href="/tasks" className="inline-flex border border-border px-4 py-2 text-sm font-semibold hover:bg-accent">
+          Back to Tasks
+        </Link>
+        <div className="border border-border bg-card p-8">
+          <h1 className="text-2xl font-bold">Student Submission Only</h1>
+          <p className="mt-2 text-muted-foreground">
+            This page is for students to submit assigned tasks. Staff and admin roles should use Tasks or Task Submissions.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!can('submissions.submit')) {
     return (
       <div className="border border-border bg-card p-8">
-        <h1 className="text-2xl font-bold">Task Locked</h1>
-        <p className="mt-2 text-muted-foreground">Your current permission cannot view this task.</p>
+        <h1 className="text-2xl font-bold">Submission Locked</h1>
+        <p className="mt-2 text-muted-foreground">Your current permission cannot submit tasks.</p>
       </div>
     )
   }
 
   if (loading || branchLoading) {
     return (
-      <div className="border border-border bg-card p-8 text-sm text-muted-foreground">Loading task details…</div>
+      <div className="border border-border bg-card p-8 text-sm text-muted-foreground">Loading submission page…</div>
     )
   }
 
@@ -181,8 +229,6 @@ export default function TaskDetailPage() {
     )
   }
 
-  const closed = isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed'
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
@@ -199,23 +245,11 @@ export default function TaskDetailPage() {
           <h1 className="mt-3 text-3xl font-bold tracking-tight">{task.title}</h1>
           <p className="mt-2 max-w-3xl text-muted-foreground">{task.description}</p>
         </div>
-
-        <div className="flex flex-wrap gap-2">
-          {can('tasks.delete') && !isStudent && (
-            <button
-              type="button"
-              onClick={() => void handleDelete()}
-              className="border border-border px-4 py-2 text-sm font-semibold hover:bg-red-500/10"
-            >
-              Delete Task
-            </button>
-          )}
-        </div>
       </div>
 
-      {(error || notice) && (
+      {notice && (
         <div className="border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
-          {notice || error}
+          {notice}
         </div>
       )}
 
@@ -229,15 +263,15 @@ export default function TaskDetailPage() {
           <div className="mt-1 font-semibold">{task.batch}</div>
         </div>
         <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Assigned By</div>
-          <div className="mt-1 font-semibold">{task.assignedBy}</div>
-        </div>
-        <div className="border border-border bg-card p-5">
           <div className="text-xs text-muted-foreground">Submission Deadline</div>
           <div className="mt-1 font-semibold">{task.dueDisplay}</div>
           {task.dueTime && (
             <div className="mt-2 text-xs text-[#153e90] dark:text-[#6ee75a]">Time scheduled for this task</div>
           )}
+        </div>
+        <div className="border border-border bg-card p-5">
+          <div className="text-xs text-muted-foreground">File Requirement</div>
+          <div className="mt-1 font-semibold">{task.fileRequirement}</div>
         </div>
       </div>
 
@@ -247,8 +281,8 @@ export default function TaskDetailPage() {
             <h2 className="text-xl font-bold">Assignment Details</h2>
             <div className="mt-5 space-y-4 text-sm">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">File Requirement</div>
-                <p className="mt-1 leading-6 text-foreground">{task.fileRequirement}</p>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Assigned By</div>
+                <p className="mt-1 text-foreground">{task.assignedBy}</p>
               </div>
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submissions</div>
@@ -257,40 +291,63 @@ export default function TaskDetailPage() {
             </div>
           </div>
 
-          {isStudent && can('submissions.submit') && (
-            <div className="border border-border bg-card p-5">
-              <h2 className="text-xl font-bold">Student Submission</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Submit before the deadline{task.dueTime ? ' and scheduled time' : ''}.
-              </p>
+          <div className="border border-border bg-card p-5">
+            <h2 className="text-xl font-bold">Your Submission</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Submit before the deadline{task.dueTime ? ' and scheduled time' : ''}.
+            </p>
 
-              <div className="mt-5">
-                {closed ? (
-                  <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-200">
-                    Submission is closed for this task.
-                  </div>
-                ) : task.studentSubmitted ? (
+            {closed ? (
+              <div className="mt-5 border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-200">
+                Submission is closed for this task.
+              </div>
+            ) : task.studentSubmitted ? (
+              <div className="mt-5 space-y-4">
+                <div className="border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
+                  You have already submitted this task.
+                </div>
+                {task.studentSubmissionId && (
                   <Link
-                    href={
-                      task.studentSubmissionId
-                        ? `/task-submissions/${task.studentSubmissionId}`
-                        : getStudentTaskSubmitHref(task)
-                    }
+                    href={`/task-submissions/${task.studentSubmissionId}`}
                     className="inline-flex border border-border px-5 py-2.5 text-sm font-semibold hover:bg-accent"
                   >
-                    View Submission
-                  </Link>
-                ) : (
-                  <Link
-                    href={getStudentTaskSubmitHref(task)}
-                    className="inline-flex bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
-                  >
-                    Open Submission Page
+                    View Submission Status
                   </Link>
                 )}
               </div>
-            </div>
-          )}
+            ) : (
+              <div className="mt-5 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold">Student note (optional)</label>
+                  <textarea
+                    value={studentNote}
+                    onChange={(event) => setStudentNote(event.target.value)}
+                    rows={4}
+                    placeholder="Add any notes about your submission for mentor review."
+                    className="w-full resize-none border border-border bg-background px-4 py-3 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold">Upload work file (optional)</label>
+                  <input
+                    type="file"
+                    onChange={(event) => setSubmissionFile(event.target.files?.[0] || null)}
+                    className="h-11 w-full border border-border bg-background px-4 py-2 text-sm outline-none file:mr-3 file:border-0 file:bg-[#153e90] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-white dark:file:bg-[#6ee75a] dark:file:text-black"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => void handleSubmit()}
+                  className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
+                >
+                  {submitting ? 'Submitting…' : 'Submit Task'}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <aside className="space-y-5">

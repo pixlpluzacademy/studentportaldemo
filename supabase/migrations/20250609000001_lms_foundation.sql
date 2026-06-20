@@ -530,7 +530,7 @@ begin
   from public.student_batch_enrollments e
   where e.batch_id = p_batch_id;
 
-  return v_batch_code || '-S' || lpad(v_next::text, 3, '0');
+  return v_batch_code || 'S' || v_next::text;
 end;
 $$;
 

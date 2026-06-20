@@ -1,73 +1,40 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useDemoAuth } from '@/lib/demo/auth'
+import { useAuth } from '@/lib/auth/provider'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import {
-  attendance as demoAttendance,
-  batches as demoBatches,
-  mentors,
-  students as demoStudents,
-} from '@/lib/demo/seed'
+  fetchAttendanceRecords,
+  fetchStudentIdByProfile,
+  fetchStudentsForBatches,
+  mapBatchListRowToAttendanceBatch,
+  mapBatchStudentsToAttendanceStudents,
+  saveAttendanceMarks,
+  type AttendanceBatch,
+  type AttendanceMark,
+  type AttendanceStudent,
+  type DailyAttendanceRecord,
+} from '@/lib/data/attendance'
+import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import { createClient } from '@/lib/supabase/client'
 
-type BatchMode = 'online' | 'offline'
-type ClassDayType = 'weekdays' | 'weekend' | 'custom'
-type AttendanceMark = 'present' | 'absent' | 'late' | 'unmarked'
 type ViewLevel = 'batches' | 'batch-students' | 'student-days'
 type AttendanceTab = 'view' | 'mark'
-
-type DemoBatch = {
-  id: string
-  name: string
-  course: string
-  mentor: string
-  mode: BatchMode
-  time: string
-  seats: string
-  status: string
-  start_date: string
-  end_date: string
-  class_day_type: ClassDayType
-  start_time: string
-  end_time: string
-  class_link: string | null
-}
-
-type DemoStudent = {
-  id: string
-  name: string
-  course: string
-  batch: string
-  attendance: string
-  grade: string
-  placement: string
-  status: string
-  email: string
-  phone: string
-  avatar_url: string
-}
-
-type DailyAttendance = {
-  id: string
-  studentId: string
-  studentName: string
-  batch: string
-  course: string
-  date: string
-  sessionTime: string
-  status: AttendanceMark
-  markedBy: string
-  note: string
-  classLink: string | null
-}
 
 type MarkingRow = {
   studentId: string
   status: AttendanceMark
   note: string
+}
+
+async function getAccessToken() {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token || null
 }
 
 function CustomIcon({
@@ -107,22 +74,6 @@ const getToday = () => {
   return new Date().toISOString().split('T')[0]
 }
 
-const timeTextToInputValue = (timeText: string) => {
-  const value = timeText.trim().toUpperCase()
-  const match = value.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/)
-
-  if (!match) return '07:00'
-
-  let hour = Number(match[1])
-  const minute = match[2] || '00'
-  const period = match[3]
-
-  if (period === 'PM' && hour < 12) hour += 12
-  if (period === 'AM' && hour === 12) hour = 0
-
-  return `${String(hour).padStart(2, '0')}:${minute}`
-}
-
 const formatTimeLabel = (timeValue: string | null) => {
   if (!timeValue) return 'No time'
 
@@ -152,7 +103,7 @@ const formatDate = (dateValue: string) => {
   })
 }
 
-const getClassDayLabel = (classDayType: ClassDayType) => {
+const getClassDayLabel = (classDayType: AttendanceBatch['class_day_type']) => {
   if (classDayType === 'weekdays') return 'Monday to Friday'
   if (classDayType === 'weekend') return 'Saturday and Sunday'
 
@@ -175,142 +126,7 @@ const getMarkClass = (status: AttendanceMark | string) => {
   return 'border border-border bg-transparent px-3 py-1 text-xs font-medium text-muted-foreground'
 }
 
-const buildDemoBatches = (): DemoBatch[] => {
-  return demoBatches.map((batch, index) => {
-    const mode = batch.mode.toLowerCase() === 'online' ? 'online' : 'offline'
-    const startTime = timeTextToInputValue(batch.time)
-    const endTime = index === 0 ? '09:00' : index === 1 ? '21:30' : '13:00'
-
-    return {
-      id: batch.id,
-      name: batch.name,
-      course: batch.course,
-      mentor: batch.mentor,
-      mode,
-      time: batch.time,
-      seats: batch.seats,
-      status: batch.status,
-      start_date:
-        index === 0 ? '2026-06-01' : index === 1 ? '2026-06-03' : '2026-06-07',
-      end_date:
-        index === 0 ? '2026-09-30' : index === 1 ? '2026-07-31' : '2026-10-06',
-      class_day_type: index === 2 ? 'weekend' : 'weekdays',
-      start_time: startTime,
-      end_time: endTime,
-      class_link: mode === 'online' ? 'https://zoom.us/j/demo-class-link' : null,
-    }
-  })
-}
-
-const buildDemoStudents = (): DemoStudent[] => {
-  return demoStudents.map((student, index) => ({
-    id: student.id,
-    name: student.name,
-    course: student.course,
-    batch: student.batch,
-    attendance: student.attendance,
-    grade: student.grade,
-    placement: student.placement,
-    status: student.status,
-    email:
-      index === 0
-        ? 'student.one@pixlpluzportal.demo'
-        : index === 1
-          ? 'student.two@pixlpluzportal.demo'
-          : 'student.three@pixlpluzportal.demo',
-    phone:
-      index === 0
-        ? '+91 98765 43001'
-        : index === 1
-          ? '+91 98765 43002'
-          : '+91 98765 43003',
-    avatar_url: '/avatar.svg',
-  }))
-}
-
-const buildDailyAttendance = (batches: DemoBatch[], students: DemoStudent[]): DailyAttendance[] => {
-  const records: DailyAttendance[] = []
-
-  const demoDates = [
-    '2026-06-01',
-    '2026-06-02',
-    '2026-06-03',
-    '2026-06-04',
-    '2026-06-05',
-    '2026-06-06',
-  ]
-
-  students.forEach((student, studentIndex) => {
-    const batch = batches.find((item) => item.name === student.batch)
-
-    if (!batch) return
-
-    demoDates.forEach((dateValue, dateIndex) => {
-      const status: AttendanceMark =
-        (studentIndex + dateIndex) % 7 === 0
-          ? 'absent'
-          : (studentIndex + dateIndex) % 5 === 0
-            ? 'late'
-            : 'present'
-
-      records.push({
-        id: `${student.id}-${dateValue}`,
-        studentId: student.id,
-        studentName: student.name,
-        batch: student.batch,
-        course: student.course,
-        date: dateValue,
-        sessionTime: `${formatTimeLabel(batch.start_time)} to ${formatTimeLabel(batch.end_time)}`,
-        status,
-        markedBy: batch.mentor,
-        note:
-          status === 'absent'
-            ? 'Student absent for this class.'
-            : status === 'late'
-              ? 'Student joined late.'
-              : 'Marked present.',
-        classLink: batch.mode === 'online' ? batch.class_link : null,
-      })
-    })
-  })
-
-  demoAttendance.forEach((item, index) => {
-    const batchStudents = students.filter((student) => student.batch === item.batch)
-    const batch = batches.find((batchItem) => batchItem.name === item.batch)
-
-    batchStudents.forEach((student, studentIndex) => {
-      const status: AttendanceMark =
-        studentIndex < Number(item.present || 0)
-          ? 'present'
-          : studentIndex < Number(item.present || 0) + Number(item.absent || 0)
-            ? 'absent'
-            : 'late'
-
-      records.push({
-        id: `history-${index}-${student.id}`,
-        studentId: student.id,
-        studentName: student.name,
-        batch: student.batch,
-        course: student.course,
-        date: item.date,
-        sessionTime: item.session,
-        status,
-        markedBy: item.markedBy,
-        note:
-          status === 'absent'
-            ? 'Absent in demo session.'
-            : status === 'late'
-              ? 'Late in demo session.'
-              : 'Present in demo session.',
-        classLink: batch?.mode === 'online' ? batch.class_link : null,
-      })
-    })
-  })
-
-  return records
-}
-
-const isDateInsideBatchRange = (dateValue: string, batch: DemoBatch) => {
+const isDateInsideBatchRange = (dateValue: string, batch: AttendanceBatch) => {
   if (!dateValue || !batch.start_date || !batch.end_date) return false
 
   const selected = new Date(`${dateValue}T00:00:00`)
@@ -328,7 +144,7 @@ const isDateInsideBatchRange = (dateValue: string, batch: DemoBatch) => {
   return selected >= start && selected <= end
 }
 
-const isValidClassDay = (dateValue: string, classDayType: ClassDayType) => {
+const isValidClassDay = (dateValue: string, classDayType: AttendanceBatch['class_day_type']) => {
   if (!dateValue) return false
 
   const date = new Date(`${dateValue}T00:00:00`)
@@ -344,15 +160,17 @@ const isValidClassDay = (dateValue: string, classDayType: ClassDayType) => {
 }
 
 export default function Page() {
-  const { can, user, role } = useDemoAuth()
+  const { can, user, role, parentRoleId } = useAuth()
+  const { activeBranchId, loading: branchLoading } = useBranchScope()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
 
-  const allBatches = useMemo(() => buildDemoBatches(), [])
-  const allStudents = useMemo(() => buildDemoStudents(), [])
-  const [dailyAttendance, setDailyAttendance] = useState<DailyAttendance[]>(() =>
-    buildDailyAttendance(allBatches, allStudents)
-  )
+  const [scopedBatches, setScopedBatches] = useState<AttendanceBatch[]>([])
+  const [allStudents, setAllStudents] = useState<AttendanceStudent[]>([])
+  const [dailyAttendance, setDailyAttendance] = useState<DailyAttendanceRecord[]>([])
+  const [dataLoading, setDataLoading] = useState(true)
+  const [dataError, setDataError] = useState('')
+  const [currentStudentId, setCurrentStudentId] = useState<string | null>(null)
 
   const [activeTab, setActiveTab] = useState<AttendanceTab>('view')
   const [viewLevel, setViewLevel] = useState<ViewLevel>('batches')
@@ -365,90 +183,105 @@ export default function Page() {
   const [markingRows, setMarkingRows] = useState<Record<string, MarkingRow>>({})
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  const currentRoleName = role?.name?.toLowerCase() || ''
-  const currentUserName = user?.fullName || ''
-  const currentEmail = user?.email?.toLowerCase() || ''
-
-  const isStudentView = currentRoleName.includes('student')
-
-  const ismentorView =
-    (currentRoleName.includes('mentor') || currentRoleName.includes('mentor')) &&
-    !currentRoleName.includes('hod') &&
-    !currentRoleName.includes('admin') &&
-    !currentRoleName.includes('controller') &&
-    !currentRoleName.includes('super')
-
-  const isHodView =
-    currentRoleName.includes('hod') ||
-    currentRoleName.includes('superior mentor')
+  const isStudentView = isStudentMyCoursesView(parentRoleId)
+  const isMentorView = parentRoleId === 'mentor'
+  const isHodView = false
 
   const canMarkAttendance =
-    !isStudentView &&
-    (can('attendance.mark') || can('attendance.create') || can('attendance.edit'))
+    !isStudentView && (can('attendance.mark') || can('attendance.edit'))
 
-  const scopedBatches = useMemo(() => {
-    if (isStudentView) return []
+  useEffect(() => {
+    if (branchLoading || !user?.id) {
+      setDataLoading(branchLoading)
+      return
+    }
 
-    if (ismentorView) {
-      const userName = currentUserName.toLowerCase()
+    if (!isStudentView && !activeBranchId) {
+      setDataLoading(false)
+      return
+    }
 
-      const assigned = allBatches.filter((batch) => {
-        const mentorName = batch.mentor.toLowerCase()
+    let cancelled = false
+    const userId = user.id
+    const branchId = activeBranchId || ''
 
-        return (
-          mentorName === userName ||
-          mentorName.includes(userName) ||
-          userName.includes(mentorName)
-        )
+    async function loadAttendanceData() {
+      setDataLoading(true)
+      setDataError('')
+
+      const batchResult = await fetchAccessibleBatches({
+        branchId,
+        userId,
+        parentRoleId,
       })
 
-      if (assigned.length > 0) return assigned
+      if (cancelled) return
 
-      const firstDemoMentorName = mentors[0]?.name || ''
-
-      return allBatches.filter((batch) => batch.mentor === firstDemoMentorName)
-    }
-
-    if (isHodView) {
-      const userName = currentUserName.toLowerCase()
-      const roleName = role?.name?.toLowerCase() || ''
-
-      const assignedMentorNames = mentors
-        .filter((mentor) => {
-          const hodName = String(mentor.hod || '').toLowerCase()
-
-          return (
-            hodName === userName ||
-            hodName === roleName ||
-            hodName.includes(userName) ||
-            hodName.includes('hod') ||
-            hodName.includes('superior mentor')
-          )
-        })
-        .map((mentor) => mentor.name)
-
-      if (assignedMentorNames.length > 0) {
-        return allBatches.filter((batch) => assignedMentorNames.includes(batch.mentor))
+      if (batchResult.error) {
+        setDataError(batchResult.error)
+        setScopedBatches([])
+        setAllStudents([])
+        setDailyAttendance([])
+        setDataLoading(false)
+        return
       }
 
-      return allBatches.filter((batch) => batch.mentor === mentors[0]?.name)
+      const batches = batchResult.batches.map(mapBatchListRowToAttendanceBatch)
+      const batchIds = batches.map((batch) => batch.id)
+      const batchById = new Map(batches.map((batch) => [batch.id, batch]))
+
+      const [studentsResult, recordsResult, studentId] = await Promise.all([
+        fetchStudentsForBatches(batchIds),
+        fetchAttendanceRecords(batchIds, { batchesById: batchById }),
+        isStudentView ? fetchStudentIdByProfile(userId) : Promise.resolve(null),
+      ])
+
+      if (cancelled) return
+
+      if (studentsResult.error || recordsResult.error) {
+        setDataError(studentsResult.error || recordsResult.error || 'Failed to load attendance.')
+      }
+
+      const students = batches.flatMap((batch) => {
+        const batchStudents = studentsResult.data.filter((student) => student.batch_id === batch.id)
+        return mapBatchStudentsToAttendanceStudents(batchStudents, batch, recordsResult.data)
+      })
+
+      const records = recordsResult.data.map((record) => {
+        const batch = batchById.get(record.batchId)
+        return {
+          ...record,
+          sessionTime: batch
+            ? `${formatTimeLabel(batch.start_time)} to ${formatTimeLabel(batch.end_time)}`
+            : record.sessionTime,
+          classLink: isStudentView ? null : record.classLink,
+        }
+      })
+
+      setScopedBatches(batches)
+      setAllStudents(students)
+      setDailyAttendance(records)
+      setCurrentStudentId(studentId)
+      setDataLoading(false)
     }
 
-    return allBatches
-  }, [allBatches, isStudentView, ismentorView, isHodView, currentUserName, role?.name])
+    void loadAttendanceData()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeBranchId, branchLoading, isStudentView, parentRoleId, user?.id])
 
   const scopedBatchNames = useMemo(() => {
     return scopedBatches.map((batch) => batch.name)
   }, [scopedBatches])
 
   const currentStudent = useMemo(() => {
-    const byEmail = allStudents.find((student) => student.email.toLowerCase() === currentEmail)
-
-    if (byEmail) return byEmail
-
-    return allStudents[0] || null
-  }, [allStudents, currentEmail])
+    if (!currentStudentId) return null
+    return allStudents.find((student) => student.id === currentStudentId) || null
+  }, [allStudents, currentStudentId])
 
   const visibleStudents = useMemo(() => {
     if (isStudentView) return currentStudent ? [currentStudent] : []
@@ -528,7 +361,7 @@ export default function Page() {
     return visibleStudents.filter((student) => student.batch === selectedViewBatch.name)
   }, [visibleStudents, selectedViewBatch])
 
-  const getStudentSummary = (student: DemoStudent) => {
+  const getStudentSummary = (student: AttendanceStudent) => {
     const records = visibleAttendance.filter((item) => item.studentId === student.id)
     const present = records.filter((item) => item.status === 'present').length
     const absent = records.filter((item) => item.status === 'absent').length
@@ -579,17 +412,25 @@ export default function Page() {
   const handleSelectMarkBatch = (batchName: string) => {
     const batch = scopedBatches.find((item) => item.name === batchName) || null
     const batchStudents = allStudents.filter((student) => student.batch === batchName)
+    const today = getToday()
+    const todayRecords = dailyAttendance.filter(
+      (record) => record.batch === batchName && record.date === today,
+    )
+    const savedClassLink = todayRecords.find((record) => record.classLink)?.classLink
 
     setSelectedMarkBatchName(batchName)
-    setClassLink(batch?.class_link || '')
+    setClassLink(savedClassLink || batch?.class_link || '')
     setMessage('')
     setError('')
 
     const defaultRows = batchStudents.reduce<Record<string, MarkingRow>>((result, student) => {
+      const todayRecord = todayRecords.find((record) => record.studentId === student.id)
+
       result[student.id] = {
         studentId: student.id,
-        status: 'unmarked',
-        note: '',
+        status:
+          todayRecord && todayRecord.status !== 'unmarked' ? todayRecord.status : 'unmarked',
+        note: todayRecord?.note || '',
       }
 
       return result
@@ -648,7 +489,7 @@ export default function Page() {
     setMarkingRows(nextRows)
   }
 
-  const saveAttendance = () => {
+  const saveAttendance = async () => {
     setMessage('')
     setError('')
 
@@ -682,39 +523,78 @@ export default function Page() {
       return
     }
 
-    const unmarkedCount = Object.values(markingRows).filter(
-      (item) => item.status === 'unmarked'
-    ).length
+    const unmarkedCount = Object.values(markingRows).filter((item) => item.status === 'unmarked').length
 
     if (unmarkedCount > 0) {
       setError('Please mark all students before saving attendance.')
       return
     }
 
-    const newRecords: DailyAttendance[] = selectedMarkStudents.map((student) => {
-      const row = markingRows[student.id]
+    const accessToken = await getAccessToken()
 
+    if (!accessToken) {
+      setError('Session expired. Please login again.')
+      return
+    }
+
+    setSaving(true)
+
+    const result = await saveAttendanceMarks(
+      {
+        batchId: selectedMarkBatch.id,
+        attendanceDate: selectedDate,
+        classLink: selectedMarkBatch.mode === 'online' ? classLink.trim() : undefined,
+        marks: selectedMarkStudents.map((student) => ({
+          studentId: student.id,
+          status: markingRows[student.id]?.status || 'unmarked',
+          note: markingRows[student.id]?.note || '',
+        })),
+      },
+      accessToken,
+    )
+
+    setSaving(false)
+
+    if (!result.ok) {
+      setError(result.error || 'Failed to save attendance.')
+      return
+    }
+
+    const batchById = new Map(scopedBatches.map((batch) => [batch.id, batch]))
+    const recordsResult = await fetchAttendanceRecords(scopedBatches.map((batch) => batch.id), {
+      batchesById: batchById,
+    })
+    const records = recordsResult.data.map((record) => {
+      const batch = batchById.get(record.batchId)
       return {
-        id: `saved-${Date.now()}-${student.id}`,
-        studentId: student.id,
-        studentName: student.name,
-        batch: selectedMarkBatch.name,
-        course: student.course,
-        date: selectedDate,
-        sessionTime: `${formatTimeLabel(selectedMarkBatch.start_time)} to ${formatTimeLabel(selectedMarkBatch.end_time)}`,
-        status: row?.status || 'unmarked',
-        markedBy: user?.fullName || role?.name || 'Demo User',
-        note: row?.note || '',
-        classLink: selectedMarkBatch.mode === 'online' ? classLink.trim() : null,
+        ...record,
+        sessionTime: batch
+          ? `${formatTimeLabel(batch.start_time)} to ${formatTimeLabel(batch.end_time)}`
+          : record.sessionTime,
+        classLink: isStudentView ? null : record.classLink,
       }
     })
 
-    const withoutSameDate = dailyAttendance.filter((record) => {
-      return !(record.batch === selectedMarkBatch.name && record.date === selectedDate)
-    })
+    setDailyAttendance(records)
+    setAllStudents(
+      scopedBatches.flatMap((batch) => {
+        const batchStudents = allStudents
+          .filter((student) => student.batchId === batch.id)
+          .map((student) => ({
+            id: student.id,
+            full_name: student.name,
+            email: student.email,
+            phone: student.phone,
+            status: student.status,
+            avatar_url: student.avatar_url,
+            batch_id: batch.id,
+          }))
 
-    setDailyAttendance([...newRecords, ...withoutSameDate])
-    setMessage('Today attendance saved successfully in demo.')
+        return mapBatchStudentsToAttendanceStudents(batchStudents, batch, records)
+      }),
+    )
+
+    setMessage('Today attendance saved successfully.')
     resetMarking()
     setActiveTab('view')
     setViewLevel('batches')
@@ -723,6 +603,14 @@ export default function Page() {
   const markedPresent = Object.values(markingRows).filter((item) => item.status === 'present').length
   const markedAbsent = Object.values(markingRows).filter((item) => item.status === 'absent').length
   const markedLate = Object.values(markingRows).filter((item) => item.status === 'late').length
+
+  if (dataLoading || branchLoading) {
+    return (
+      <div className="border border-border bg-transparent p-8 text-sm text-muted-foreground">
+        Loading attendance…
+      </div>
+    )
+  }
 
   if (!can('attendance.view')) {
     return (
@@ -746,7 +634,7 @@ export default function Page() {
               <p className="mt-3 max-w-4xl text-muted-foreground">
                 {isStudentView
                   ? 'View your day-wise attendance details.'
-                  : ismentorView || isHodView
+                  : isMentorView || isHodView
                     ? 'View assigned batch attendance and student day-wise attendance.'
                     : 'View all batch attendance, drill into students, and review daily attendance.'}
               </p>
@@ -764,6 +652,12 @@ export default function Page() {
           </div>
         </CardContent>
       </Card>
+
+      {dataError && (
+        <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          {dataError}
+        </div>
+      )}
 
       {error && (
         <div className="border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
@@ -919,7 +813,7 @@ export default function Page() {
         <Card className="border border-border bg-transparent">
           <CardHeader>
             <CardTitle>
-              {ismentorView || isHodView ? 'Assigned Batch Attendance Summary' : 'All Batch Attendance Summary'}
+              {isMentorView || isHodView ? 'Assigned Batch Attendance Summary' : 'All Batch Attendance Summary'}
             </CardTitle>
           </CardHeader>
 
@@ -1298,7 +1192,8 @@ export default function Page() {
 
                   <Button
                     type="button"
-                    onClick={saveAttendance}
+                    onClick={() => void saveAttendance()}
+                    disabled={saving}
                     className="bg-[#6ee75a] text-black hover:bg-[#5dd84a]"
                   >
                     Save Attendance

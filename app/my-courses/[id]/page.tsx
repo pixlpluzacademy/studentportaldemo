@@ -2,9 +2,25 @@
 
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { useMemo, useState } from 'react'
-import { attendance, batches, courses, students, submissions, tasks } from '@/lib/demo/seed'
-import { useDemoAuth } from '@/lib/demo/auth'
+import { useEffect, useMemo, useState } from 'react'
+import { useAuth } from '@/lib/auth/provider'
+import type { CourseBlueprint } from '@/lib/data/course-blueprint'
+import {
+  buildCourseAttendanceSummaries,
+  computeAttendancePercent,
+  fetchAttendanceRecords,
+  mapBatchListRowToAttendanceBatch,
+  type CourseAttendanceSessionSummary,
+} from '@/lib/data/attendance'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
+import {
+  fetchAccessibleBatches,
+  fetchMyCourseDetail,
+  type MyCourseDetailBatch,
+} from '@/lib/data/my-courses'
+import { fetchTaskSubmissions, type TaskSubmissionListRow } from '@/lib/data/task-submissions'
+import { fetchStudentIdByProfileId, fetchTasksForBatches, type CourseTaskRow } from '@/lib/data/tasks'
+import { createClient } from '@/lib/supabase/client'
 
 type WorkPackage = {
   id: string
@@ -34,299 +50,67 @@ type CourseDetail = {
   description: string
   duration: string
   workPackages: number
-  portfolioOutputs: number
   passMark: number
   levels: CourseLevel[]
   assignments: string[]
   rubric: { label: string; value: string }[]
   tools: string[]
-  outputs: string[]
 }
 
-const courseDetails: CourseDetail[] = [
-  {
-    id: 'co1',
-    name: 'Digital Marketing',
-    type: 'Professional',
-    tagline: 'From zero to campaign-ready in 1 month.',
-    description:
-      'Master performance marketing, content systems, paid ads, analytics and growth strategy. Build real campaign assets for portfolio and placement readiness.',
-    duration: '1 Month',
-    workPackages: 11,
-    portfolioOutputs: 4,
-    passMark: 70,
-    levels: [
-      {
-        id: 'foundation',
-        name: 'Foundation',
-        color: 'green',
-        summary: 'Build your understanding of brand, content, digital channels and customer targeting.',
-        packages: [
-          {
-            id: 'wp-01',
-            number: '01',
-            title: 'Brand & Market Basics',
-            duration: '1 week',
-            goal: 'Understand brand positioning, target audience segmentation and competitive landscape analysis.',
-            skills: ['Brand positioning', 'Audience segmentation', 'Competitor research', 'Value proposition writing'],
-            tools: ['Notion', 'Google Trends', 'Semrush free tier'],
-            practiceTasks: [
-              'Map two brands in the same niche',
-              'Define three audience personas',
-              'Write a positioning statement',
-            ],
-            finalDeliverable: 'Brand strategy one-pager with positioning, personas and value proposition.',
-          },
-          {
-            id: 'wp-02',
-            number: '02',
-            title: 'Content System',
-            duration: '2 weeks',
-            goal: 'Create a 30-day content engine for social media, reels, carousels and campaign communication.',
-            skills: ['Content planning', 'Caption writing', 'Creative direction', 'Content calendar'],
-            tools: ['Canva', 'Meta Business Suite', 'Google Sheets'],
-            practiceTasks: [
-              'Create 10 content ideas for one brand',
-              'Write 5 reel concepts with hooks',
-              'Prepare a 30-day content calendar',
-            ],
-            finalDeliverable: '30-day content calendar with captions, hooks and creative direction.',
-          },
-        ],
-      },
-      {
-        id: 'intermediate',
-        name: 'Intermediate',
-        color: 'yellow',
-        summary: 'Run paid campaigns, build reporting structure and understand campaign performance.',
-        packages: [
-          {
-            id: 'wp-03',
-            number: '03',
-            title: 'Paid Ads Fundamentals',
-            duration: '2 weeks',
-            goal: 'Understand campaign objectives, audience setup, ad structure, budget planning and testing.',
-            skills: ['Meta ads', 'Campaign objective', 'Audience testing', 'Ad copy'],
-            tools: ['Meta Ads Manager', 'Google Ads', 'Canva'],
-            practiceTasks: [
-              'Create campaign structures for awareness, leads and conversion',
-              'Write 10 ad copy variations',
-              'Build an audience testing plan',
-            ],
-            finalDeliverable: 'Paid ads campaign blueprint with objective, creatives, targeting and budget split.',
-          },
-        ],
-      },
-      {
-        id: 'advanced',
-        name: 'Advanced',
-        color: 'pink',
-        summary: 'Prepare portfolio-ready campaign systems and final presentation output.',
-        packages: [
-          {
-            id: 'wp-04',
-            number: '04',
-            title: 'Growth Strategy Sprint',
-            duration: '1 week',
-            goal: 'Design a 90-day growth strategy using funnel thinking, experiments and campaign planning.',
-            skills: ['Funnel strategy', 'Experiment design', 'KPI planning', 'Channel prioritisation'],
-            tools: ['Notion', 'Google Sheets', 'Looker Studio'],
-            practiceTasks: [
-              'Map a funnel for two brands',
-              'Design three growth experiments',
-              'Create KPI dashboard structure',
-            ],
-            finalDeliverable: '90-day growth strategy with funnel audit, channel mix, experiment backlog and KPI dashboard.',
-          },
-        ],
-      },
-    ],
-    assignments: [
-      'Brand audit and positioning document',
-      '30-day content calendar',
-      'Paid ads campaign blueprint',
-      'Analytics report and recommendation sheet',
-    ],
-    rubric: [
-      { label: 'Strategy clarity', value: '20%' },
-      { label: 'Execution quality', value: '25%' },
-      { label: 'Tool usage', value: '20%' },
-      { label: 'Final project', value: '25%' },
-      { label: 'Presentation', value: '10%' },
-    ],
-    tools: ['Meta Ads', 'Google Ads', 'GA4', 'Canva', 'Notion', 'Looker Studio', 'Google Sheets'],
-    outputs: [
-      'Brand strategy one-pager',
-      'Content calendar',
-      'Paid campaign plan',
-      'Final performance marketing portfolio project',
-    ],
-  },
-  {
-    id: 'co2',
-    name: '3D Visualization',
-    type: 'Advanced',
-    tagline: 'Build cinematic architectural visuals and portfolio-ready renders.',
-    description:
-      'Learn modeling, materials, lighting, camera composition and render presentation for architecture and interior visualization.',
-    duration: '2 Months',
-    workPackages: 10,
-    portfolioOutputs: 5,
-    passMark: 70,
-    levels: [
-      {
-        id: 'foundation',
-        name: 'Foundation',
-        color: 'green',
-        summary: 'Understand 3D workflow, modeling basics and clean scene setup.',
-        packages: [
-          {
-            id: 'wp-01',
-            number: '01',
-            title: '3D Scene Setup',
-            duration: '1 week',
-            goal: 'Understand scene scale, modeling cleanliness and asset organization.',
-            skills: ['Scene setup', 'Basic modeling', 'Reference reading', 'Asset organization'],
-            tools: ['3ds Max', 'Corona', 'V-Ray'],
-            practiceTasks: ['Model basic room shell', 'Create furniture blocks', 'Organize scene layers'],
-            finalDeliverable: 'Clean 3D room scene with organized assets.',
-          },
-        ],
-      },
-      {
-        id: 'intermediate',
-        name: 'Intermediate',
-        color: 'yellow',
-        summary: 'Work with materials, lights and camera angles for realistic output.',
-        packages: [
-          {
-            id: 'wp-02',
-            number: '02',
-            title: 'Lighting and Materials',
-            duration: '3 weeks',
-            goal: 'Create realistic materials and balanced lighting for interior scenes.',
-            skills: ['Material setup', 'Lighting', 'Camera composition', 'Render testing'],
-            tools: ['3ds Max', 'V-Ray', 'Corona', 'Photoshop'],
-            practiceTasks: ['Create wood, fabric and metal materials', 'Set daylight lighting', 'Render two camera angles'],
-            finalDeliverable: 'Interior render with realistic lighting and material setup.',
-          },
-        ],
-      },
-      {
-        id: 'advanced',
-        name: 'Advanced',
-        color: 'pink',
-        summary: 'Create final render presentation and portfolio-ready output.',
-        packages: [
-          {
-            id: 'wp-03',
-            number: '03',
-            title: 'Portfolio Render',
-            duration: '2 weeks',
-            goal: 'Complete one final render project with post-production and presentation.',
-            skills: ['Final rendering', 'Post-production', 'Presentation board', 'Portfolio storytelling'],
-            tools: ['3ds Max', 'Corona', 'Photoshop'],
-            practiceTasks: ['Render final view', 'Do post-production pass', 'Prepare presentation sheet'],
-            finalDeliverable: 'Final portfolio-ready architectural visualization project.',
-          },
-        ],
-      },
-    ],
-    assignments: ['Bedroom interior render', 'Material study board', 'Lighting comparison render', 'Final portfolio render'],
-    rubric: [
-      { label: 'Modeling quality', value: '25%' },
-      { label: 'Lighting', value: '20%' },
-      { label: 'Materials', value: '20%' },
-      { label: 'Composition', value: '20%' },
-      { label: 'Presentation', value: '15%' },
-    ],
-    tools: ['3ds Max', 'V-Ray', 'Corona', 'Photoshop'],
-    outputs: ['Interior render', 'Material board', 'Lighting study', 'Portfolio presentation'],
-  },
-  {
-    id: 'co3',
-    name: 'Website Development',
-    type: 'Basic + Internship',
-    tagline: 'Build modern websites with real project workflow.',
-    description:
-      'Learn frontend foundations, responsive layout, Next.js structure, Supabase basics and deployment-ready project workflow.',
-    duration: '4 Months',
-    workPackages: 12,
-    portfolioOutputs: 6,
-    passMark: 70,
-    levels: [
-      {
-        id: 'foundation',
-        name: 'Foundation',
-        color: 'green',
-        summary: 'Learn HTML, CSS, layout logic and responsive web basics.',
-        packages: [
-          {
-            id: 'wp-01',
-            number: '01',
-            title: 'Frontend Basics',
-            duration: '3 weeks',
-            goal: 'Understand structure, layout, typography and responsive design.',
-            skills: ['HTML', 'CSS', 'Responsive layout', 'Page structure'],
-            tools: ['VS Code', 'Chrome DevTools', 'Figma'],
-            practiceTasks: ['Create landing page hero', 'Build card grid', 'Make responsive layout'],
-            finalDeliverable: 'Responsive landing page section.',
-          },
-        ],
-      },
-      {
-        id: 'intermediate',
-        name: 'Intermediate',
-        color: 'yellow',
-        summary: 'Build reusable UI and understand Next.js app structure.',
-        packages: [
-          {
-            id: 'wp-02',
-            number: '02',
-            title: 'Next.js UI Development',
-            duration: '4 weeks',
-            goal: 'Build reusable components and route-based pages.',
-            skills: ['Next.js App Router', 'Components', 'Props', 'Tailwind'],
-            tools: ['Next.js', 'Tailwind', 'TypeScript'],
-            practiceTasks: ['Create dashboard cards', 'Build listing table', 'Create detail page'],
-            finalDeliverable: 'Mini dashboard app with listing and detail page.',
-          },
-        ],
-      },
-      {
-        id: 'advanced',
-        name: 'Advanced',
-        color: 'pink',
-        summary: 'Connect database, authentication and deployment workflow.',
-        packages: [
-          {
-            id: 'wp-03',
-            number: '03',
-            title: 'Supabase and Deployment',
-            duration: '4 weeks',
-            goal: 'Connect real backend, authentication and deploy the application.',
-            skills: ['Supabase', 'Authentication', 'Database integration', 'Vercel deployment'],
-            tools: ['Supabase', 'PostgreSQL', 'Vercel'],
-            practiceTasks: ['Create Supabase table', 'Connect data to page', 'Deploy project to Vercel'],
-            finalDeliverable: 'Deployed full-stack demo project.',
-          },
-        ],
-      },
-    ],
-    assignments: ['Portfolio landing page', 'Dashboard UI', 'Supabase connected table', 'Final deployed website'],
-    rubric: [
-      { label: 'Code structure', value: '25%' },
-      { label: 'Responsive design', value: '20%' },
-      { label: 'Backend connection', value: '20%' },
-      { label: 'UI quality', value: '20%' },
-      { label: 'Deployment', value: '15%' },
-    ],
-    tools: ['Next.js', 'TypeScript', 'Tailwind', 'Supabase', 'Vercel'],
-    outputs: ['Portfolio page', 'Dashboard UI', 'Full-stack demo', 'Deployed website'],
-  },
-]
+type MarksRow = {
+  id: string
+  student: string
+  task: string
+  mentorScore: string
+  hodStatus: string
+  qaStatus: string
+}
 
-const tabs = ['Overview', 'Syllabus', 'Tasks', 'Attendance', 'Marks', 'Tools', 'Portfolio Outputs']
+const tabs = ['Overview', 'Syllabus', 'Tasks', 'Attendance', 'Marks']
+
+function mapBlueprintToDetail(blueprint: CourseBlueprint): CourseDetail {
+  return {
+    id: blueprint.id,
+    name: blueprint.name,
+    type: blueprint.typeLabel,
+    tagline: blueprint.tagline,
+    description: blueprint.description,
+    duration: blueprint.duration,
+    workPackages: blueprint.workPackages,
+    passMark: blueprint.passMark,
+    levels: blueprint.levels.map((level) => ({
+      id: level.id,
+      name: level.name,
+      color: level.color,
+      summary: level.summary,
+      packages: level.packages.map((pkg) => ({
+        id: pkg.id,
+        number: pkg.number,
+        title: pkg.title,
+        duration: pkg.duration,
+        goal: pkg.goal,
+        skills: pkg.skills,
+        tools: pkg.tools,
+        practiceTasks: pkg.practiceTasks,
+        finalDeliverable: pkg.finalDeliverable,
+      })),
+    })),
+    assignments: blueprint.assignments,
+    rubric: blueprint.rubric,
+    tools: blueprint.tools,
+  }
+}
+
+function mapSubmissionRow(row: TaskSubmissionListRow): MarksRow {
+  return {
+    id: row.id,
+    student: row.student,
+    task: row.task,
+    mentorScore: row.mentorMark,
+    hodStatus: row.hodStatus,
+    qaStatus: row.qaStatus,
+  }
+}
 
 function levelStyle(color: CourseLevel['color']) {
   if (color === 'green') return 'border-[#6ee75a] text-[#6ee75a] bg-[#6ee75a]/10'
@@ -369,71 +153,189 @@ function getGrade(score: number) {
 
 export default function Page() {
   const params = useParams()
-  const { role, user } = useDemoAuth()
+  const { can, user, parentRoleId } = useAuth()
+  const { activeBranchId } = useBranchScope()
+
   const [activeTab, setActiveTab] = useState('Overview')
   const [openPackage, setOpenPackage] = useState('')
+  const [course, setCourse] = useState<CourseDetail | null>(null)
+  const [relatedBatches, setRelatedBatches] = useState<MyCourseDetailBatch[]>([])
+  const [relatedTasks, setRelatedTasks] = useState<CourseTaskRow[]>([])
+  const [relatedAttendance, setRelatedAttendance] = useState<CourseAttendanceSessionSummary[]>([])
+  const [relatedSubmissions, setRelatedSubmissions] = useState<MarksRow[]>([])
+  const [averageAttendance, setAverageAttendance] = useState('—')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   const courseId = String(params?.id || '')
-  const course = courseDetails.find((item) => item.id === courseId) || courseDetails[0]
-  const seedCourse = courses.find((item) => item.id === course.id || item.name === course.name)
 
-  const isStudent = role?.id === 'student'
-  const ismentor = role?.id === 'mentor' || role?.id === 'mentor'
+  const isStudent = parentRoleId === 'student'
+  const isMentor = parentRoleId === 'mentor'
 
-  const currentStudent = useMemo(() => {
-    return students.find((student) => student.name === user?.fullName) || students[0]
-  }, [user?.fullName])
+  useEffect(() => {
+    async function loadCourse() {
+      if (!courseId || !user?.id) {
+        setLoading(false)
+        return
+      }
 
-  const relatedBatches = useMemo(() => {
-    const courseBatches = batches.filter((batch) => batch.course === course.name)
+      if (!isStudent && !activeBranchId) {
+        setLoading(false)
+        return
+      }
 
-    if (isStudent) {
-      return courseBatches.filter((batch) => batch.name === currentStudent?.batch)
-    }
+      setLoading(true)
+      setError('')
 
-    if (ismentor && user?.fullName) {
-      return courseBatches.filter((batch) => batch.mentor === user.fullName)
-    }
+      const result = await fetchMyCourseDetail(courseId, {
+        branchId: activeBranchId || '',
+        userId: user.id,
+        parentRoleId,
+      })
 
-    return courseBatches
-  }, [course.name, currentStudent?.batch, isStudent, ismentor, user?.fullName])
+      if (result.error || !result.data) {
+        setCourse(null)
+        setRelatedBatches([])
+        setRelatedTasks([])
+        setRelatedAttendance([])
+        setRelatedSubmissions([])
+        setAverageAttendance('—')
+        setError(result.error || 'Course not found.')
+        setLoading(false)
+        return
+      }
 
-  const relatedStudents = useMemo(() => {
-    return students.filter((student) => student.course === course.name && relatedBatches.some((batch) => batch.name === student.batch))
-  }, [course.name, relatedBatches])
+      const { course: blueprint, batches } = result.data
+      setCourse(mapBlueprintToDetail(blueprint))
+      setRelatedBatches(batches)
 
-  const relatedTasks = useMemo(() => {
-    return tasks.filter((task) => task.course === course.name && relatedBatches.some((batch) => batch.name === task.batch))
-  }, [course.name, relatedBatches])
+      const batchIds = batches.map((batch) => batch.id)
 
-  const relatedSubmissions = useMemo(() => {
-    return submissions.filter((submission) => relatedTasks.some((task) => task.title === submission.task))
-  }, [relatedTasks])
+      if (!batchIds.length) {
+        setRelatedTasks([])
+        setRelatedAttendance([])
+        setRelatedSubmissions([])
+        setAverageAttendance('—')
+        setLoading(false)
+        return
+      }
 
-  const relatedAttendance = useMemo(() => {
-    return attendance.filter((item) => relatedBatches.some((batch) => batch.name === item.batch))
-  }, [relatedBatches])
+      const { batches: accessibleBatches } = await fetchAccessibleBatches({
+        branchId: activeBranchId || '',
+        userId: user.id,
+        parentRoleId,
+      })
 
-  const averageAttendance =
-    relatedStudents.length > 0
-      ? `${Math.round(
-          relatedStudents.reduce((total, student) => total + Number(String(student.attendance).replace('%', '')), 0) /
-            relatedStudents.length,
-        )}%`
-      : '0%'
+      const scopedBatches = accessibleBatches.filter((batch) => batchIds.includes(batch.id))
+      const attendanceBatches = scopedBatches.map(mapBatchListRowToAttendanceBatch)
+      const batchesById = new Map(attendanceBatches.map((batch) => [batch.id, batch]))
+      const batchNames = new Map(batches.map((batch) => [batch.id, batch.name]))
+      const enrolledCounts = new Map(scopedBatches.map((batch) => [batch.id, batch.enrolled_count]))
+      const batchLookup = new Map(
+        scopedBatches.map((batch) => [
+          batch.id,
+          {
+            name: batch.name,
+            courseName: batch.course_name,
+            enrolledCount: batch.enrolled_count,
+          },
+        ]),
+      )
 
-  const completedSubmissions = relatedSubmissions.length
-  const courseProgress = relatedTasks.length > 0 ? Math.min(100, Math.round((completedSubmissions / relatedTasks.length) * 100)) : 0
+      const studentId = isStudent ? await fetchStudentIdByProfileId(user.id) : null
 
-  const averageScore =
-    relatedSubmissions.length > 0
-      ? Math.round(
-          relatedSubmissions.reduce((total, submission) => {
-            const value = Number(submission.mentorScore)
-            return total + (Number.isNaN(value) ? 0 : value)
-          }, 0) / relatedSubmissions.length,
+      const [tasksResult, attendanceResult, submissionsResult] = await Promise.all([
+        fetchTasksForBatches(batchIds, {
+          studentId,
+          batchNames,
+          enrolledCounts,
+        }),
+        fetchAttendanceRecords(batchIds, {
+          studentId: studentId || undefined,
+          batchesById,
+        }),
+        fetchTaskSubmissions({ batchLookup }),
+      ])
+
+      setRelatedTasks(tasksResult.data || [])
+
+      const summaries = buildCourseAttendanceSummaries(attendanceBatches, attendanceResult.data || [])
+      setRelatedAttendance(summaries)
+
+      const filteredSubmissions = (submissionsResult.data || []).filter((row) =>
+        batchIds.includes(row.batchId),
+      )
+      setRelatedSubmissions(filteredSubmissions.map(mapSubmissionRow))
+
+      if (isStudent && attendanceResult.data?.length) {
+        setAverageAttendance(`${computeAttendancePercent(attendanceResult.data)}%`)
+      } else if (summaries.length) {
+        const totalPresent = summaries.reduce((total, item) => total + item.present, 0)
+        const totalMarked = summaries.reduce(
+          (total, item) => total + item.present + item.absent + item.late,
+          0,
         )
-      : 0
+        setAverageAttendance(
+          totalMarked > 0 ? `${Math.round((totalPresent / totalMarked) * 100)}%` : '—',
+        )
+      } else {
+        setAverageAttendance('—')
+      }
+
+      setLoading(false)
+    }
+
+    void loadCourse()
+  }, [activeBranchId, courseId, isStudent, parentRoleId, user?.id])
+
+  const courseProgress = useMemo(() => {
+    if (!relatedTasks.length) return 0
+    const completedCount = relatedSubmissions.length
+    return Math.min(100, Math.round((completedCount / relatedTasks.length) * 100))
+  }, [relatedSubmissions.length, relatedTasks.length])
+
+  const averageScore = useMemo(() => {
+    if (!relatedSubmissions.length) return 0
+
+    const scores = relatedSubmissions
+      .map((submission) => Number(submission.mentorScore))
+      .filter((value) => !Number.isNaN(value) && value > 0)
+
+    if (!scores.length) return 0
+
+    return Math.round(scores.reduce((total, value) => total + value, 0) / scores.length)
+  }, [relatedSubmissions])
+
+  if (!can('my-courses.view')) {
+    return (
+      <div className="border border-border bg-card p-8">
+        <h1 className="text-2xl font-bold">My Courses Locked</h1>
+        <p className="mt-2 text-muted-foreground">Your current permission cannot view courses.</p>
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-6xl border border-border bg-card p-8">
+        <p className="text-sm text-muted-foreground">Loading course details...</p>
+      </div>
+    )
+  }
+
+  if (error || !course) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-4">
+        <Link href="/my-courses" className="text-sm font-semibold text-muted-foreground hover:text-foreground">
+          ← My Courses
+        </Link>
+        <div className="border border-border bg-card p-8">
+          <h1 className="text-2xl font-bold">Course Unavailable</h1>
+          <p className="mt-2 text-muted-foreground">{error || 'This course could not be loaded.'}</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -467,7 +369,7 @@ export default function Page() {
             <p className="mt-2 max-w-3xl text-muted-foreground">{course.tagline}</p>
             <p className="mt-4 max-w-4xl leading-7 text-muted-foreground">{course.description}</p>
 
-            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
               <div className="border border-border bg-background/60 p-4">
                 <p className="text-xs uppercase tracking-wide text-muted-foreground">Duration</p>
                 <p className="mt-1 text-lg font-bold">{course.duration}</p>
@@ -476,11 +378,6 @@ export default function Page() {
               <div className="border border-border bg-background/60 p-4">
                 <p className="text-xs uppercase tracking-wide text-muted-foreground">Work Packages</p>
                 <p className="mt-1 text-lg font-bold">{course.workPackages}</p>
-              </div>
-
-              <div className="border border-border bg-background/60 p-4">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">Portfolio Outputs</p>
-                <p className="mt-1 text-lg font-bold">{course.portfolioOutputs}</p>
               </div>
 
               <div className="border border-border bg-background/60 p-4">
@@ -510,7 +407,9 @@ export default function Page() {
         <div className="border border-border bg-card p-5">
           <div className="text-3xl font-bold">{relatedTasks.length}</div>
           <div className="mt-1 text-sm text-muted-foreground">Assigned Tasks</div>
-          <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">{relatedSubmissions.length} submissions</div>
+          <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">
+            {relatedSubmissions.length} submissions
+          </div>
         </div>
 
         <div className="border border-border bg-card p-5">
@@ -557,9 +456,13 @@ export default function Page() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="font-bold">{batch.name}</h3>
-                        <p className="mt-1 text-sm text-muted-foreground">{batch.mode} · {batch.time}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {batch.mode} · {batch.time}
+                        </p>
                       </div>
-                      <span className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${getStatusClass(batch.status)}`}>
+                      <span
+                        className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${getStatusClass(batch.status)}`}
+                      >
                         {batch.status}
                       </span>
                     </div>
@@ -604,7 +507,7 @@ export default function Page() {
               <p className="mt-3 text-sm leading-6 text-muted-foreground">
                 {isStudent
                   ? 'You are viewing the course connected to your batch.'
-                  : ismentor
+                  : isMentor
                     ? 'You are viewing course details connected to your assigned batches.'
                     : 'Management can view connected batches, students, tasks and progress.'}
               </p>
@@ -613,12 +516,35 @@ export default function Page() {
             <div className="border border-border bg-card p-5">
               <h3 className="text-lg font-bold">Course Tools</h3>
               <div className="mt-4 flex flex-wrap gap-2">
-                {(seedCourse?.tools || course.tools.join(', ')).split(',').map((tool) => (
-                  <span key={tool.trim()} className="border border-border bg-background px-3 py-1 text-xs font-semibold">
-                    {tool.trim()}
-                  </span>
-                ))}
+                {course.tools.length > 0 ? (
+                  course.tools.map((tool) => (
+                    <span key={tool} className="border border-border bg-background px-3 py-1 text-xs font-semibold">
+                      {tool}
+                    </span>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">No tools added yet.</p>
+                )}
               </div>
+            </div>
+
+            <div className="border border-border bg-card p-5">
+              <h3 className="text-lg font-bold">Marking Criteria</h3>
+              {course.rubric.length === 0 ? (
+                <p className="mt-4 text-sm text-muted-foreground">No marking criteria added yet.</p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {course.rubric.map((item) => (
+                    <div
+                      key={item.label}
+                      className="flex items-center justify-between border border-border bg-background/60 p-3 text-sm"
+                    >
+                      <span className="text-muted-foreground">{item.label}</span>
+                      <span className="font-bold">{item.value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </aside>
         </div>
@@ -647,7 +573,9 @@ export default function Page() {
                       className="flex w-full items-center justify-between gap-4 p-4 text-left"
                     >
                       <div>
-                        <div className="text-xs font-semibold text-[#153e90] dark:text-[#6ee75a]">Package {pkg.number}</div>
+                        <div className="text-xs font-semibold text-[#153e90] dark:text-[#6ee75a]">
+                          Package {pkg.number}
+                        </div>
                         <div className="mt-1 font-bold">{pkg.title}</div>
                         <div className="mt-1 text-sm text-muted-foreground">{pkg.duration}</div>
                       </div>
@@ -742,7 +670,9 @@ export default function Page() {
                     <td className="px-4 py-4 text-muted-foreground">{task.due}</td>
                     <td className="px-4 py-4 text-muted-foreground">{task.submissions}</td>
                     <td className="px-4 py-4">
-                      <span className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${getStatusClass(task.status)}`}>
+                      <span
+                        className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${getStatusClass(task.status)}`}
+                      >
                         {task.status}
                       </span>
                     </td>
@@ -780,9 +710,13 @@ export default function Page() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="font-bold">{item.session}</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">{item.date} · {item.batch}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {item.date} · {item.batch}
+                    </p>
                   </div>
-                  <span className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${getStatusClass(item.status)}`}>
+                  <span
+                    className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${getStatusClass(item.status)}`}
+                  >
                     {item.status}
                   </span>
                 </div>
@@ -846,7 +780,10 @@ export default function Page() {
                     <td className="px-4 py-4 text-muted-foreground">{submission.hodStatus}</td>
                     <td className="px-4 py-4 text-muted-foreground">{submission.qaStatus}</td>
                     <td className="px-4 py-4">
-                      <Link href={`/task-submissions/${submission.id}`} className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent">
+                      <Link
+                        href={`/task-submissions/${submission.id}`}
+                        className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
+                      >
                         View Details
                       </Link>
                     </td>
@@ -862,47 +799,6 @@ export default function Page() {
                 )}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'Tools' && (
-        <div className="border border-border bg-card p-5">
-          <h2 className="text-xl font-bold">Tools Covered</h2>
-          <div className="mt-5 flex flex-wrap gap-3">
-            {course.tools.map((tool) => (
-              <span key={tool} className="border border-border bg-background px-4 py-2 text-sm font-semibold">
-                {tool}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'Portfolio Outputs' && (
-        <div className="grid gap-5 lg:grid-cols-2">
-          <div className="border border-border bg-card p-5">
-            <h2 className="text-xl font-bold">Portfolio Outputs</h2>
-            <ul className="mt-4 space-y-3 text-sm text-muted-foreground">
-              {course.outputs.map((output) => (
-                <li key={output} className="flex gap-2">
-                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                  {output}
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="border border-border bg-card p-5">
-            <h2 className="text-xl font-bold">Marking Criteria</h2>
-            <div className="mt-4 space-y-3">
-              {course.rubric.map((item) => (
-                <div key={item.label} className="flex items-center justify-between border border-border bg-background/60 p-3 text-sm">
-                  <span className="text-muted-foreground">{item.label}</span>
-                  <span className="font-bold">{item.value}</span>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       )}

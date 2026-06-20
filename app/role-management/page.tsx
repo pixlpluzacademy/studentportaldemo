@@ -7,7 +7,7 @@ import {
   canManagePermissionProfile,
   deletePermissionProfile,
   enabledModulesFromPermissionKeys,
-  isElevatedPermissionProfile,
+  isImmutableSuperAdminProfile,
   savePermissionProfile,
   type PermissionProfileItem,
 } from '@/lib/data/permissions'
@@ -36,15 +36,16 @@ function emptyEditing(parentRoleId = 'mentor'): EditingProfile {
   }
 }
 
-function isSuperAdminProfile(profile: Pick<PermissionProfileItem, 'slug'>) {
-  return profile.slug === 'super_admin_full'
+function isSuperAdminProfile(profile: Pick<PermissionProfileItem, 'slug' | 'parent_role_id'>) {
+  return isImmutableSuperAdminProfile(profile)
 }
 
 function isProfileLockedForActor(
   profile: Pick<PermissionProfileItem, 'slug' | 'parent_role_id'>,
-  actorParentRoleId: string | null | undefined,
+  _actorParentRoleId: string | null | undefined,
 ) {
-  return isElevatedPermissionProfile(profile) && !canManagePermissionProfile(actorParentRoleId, profile)
+  if (isImmutableSuperAdminProfile(profile)) return true
+  return !canManagePermissionProfile(_actorParentRoleId, profile)
 }
 
 function isSuperAdminUser(demoUser: { roleId: string }) {
@@ -160,7 +161,11 @@ export default function RoleManagementPage() {
     }
 
     if (isLockedProfile) {
-      setNotice('Only Super Admin can edit Super Admin and Company Admin profiles.')
+      setNotice(
+        isImmutableSuperAdminProfile(editing)
+          ? 'Super Admin permission profile is system-locked and cannot be edited.'
+          : 'Only Super Admin can edit Company Admin profiles.',
+      )
       return
     }
 
@@ -212,7 +217,11 @@ export default function RoleManagementPage() {
 
   const editRole = (profile: PermissionProfileItem) => {
     if (isProfileLockedForActor(profile, parentRoleId)) {
-      setNotice('Only Super Admin can edit Super Admin and Company Admin profiles.')
+      setNotice(
+        isImmutableSuperAdminProfile(profile)
+          ? 'Super Admin permission profile is system-locked and cannot be edited.'
+          : 'Only Super Admin can edit Company Admin profiles.',
+      )
       return
     }
 
@@ -228,7 +237,11 @@ export default function RoleManagementPage() {
     if (profile.status === status) return
 
     if (isProfileLockedForActor(profile, parentRoleId)) {
-      setNotice('Only Super Admin can change Super Admin and Company Admin profile status.')
+      setNotice(
+        isImmutableSuperAdminProfile(profile)
+          ? 'Super Admin permission profile is system-locked and cannot be changed.'
+          : 'Only Super Admin can change Company Admin profile status.',
+      )
       return
     }
 
@@ -277,7 +290,11 @@ export default function RoleManagementPage() {
 
   const deleteRole = async (profile: PermissionProfileItem) => {
     if (isProfileLockedForActor(profile, parentRoleId)) {
-      setNotice('Only Super Admin can delete Super Admin and Company Admin profiles.')
+      setNotice(
+        isImmutableSuperAdminProfile(profile)
+          ? 'Super Admin permission profile cannot be deleted.'
+          : 'Only Super Admin can delete Company Admin profiles.',
+      )
       return
     }
 
@@ -708,7 +725,7 @@ export default function RoleManagementPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-right">
                           {isProfileLockedForActor(profile, parentRoleId) ? (
                             <span className="inline-flex min-w-[280px] justify-end text-xs text-muted-foreground">
-                              {isSuperAdminProfile(profile) ? 'Locked · Active' : 'Super Admin only'}
+                              {isSuperAdminProfile(profile) ? 'System locked' : 'Super Admin only'}
                             </span>
                           ) : (
                             <div className="inline-flex min-w-[280px] justify-end gap-2">

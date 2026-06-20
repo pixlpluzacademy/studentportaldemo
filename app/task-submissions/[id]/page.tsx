@@ -1,76 +1,21 @@
 'use client'
 
 import Link from 'next/link'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
-import { useDemoAuth } from '@/lib/demo/auth'
-import { students, submissions, tasks } from '@/lib/demo/seed'
-
-type ReviewDecision = 'Pending' | 'Approved' | 'Rejected' | 'Revision Requested'
-
-type DemoSubmissionDetail = {
-  id: string
-  student: string
-  task: string
-  course: string
-  batch: string
-  mentor: string
-  submitted: string
-  status: string
-  fileName: string
-  studentNote: string
-  mentorMark: string
-  mentorComment: string
-  mentorDecision: ReviewDecision
-  hodMark: string
-  hodComment: string
-  hodDecision: ReviewDecision
-  qaMark: string
-  qaComment: string
-  qaDecision: ReviewDecision
-}
-
-const demoSubmissionDetails: DemoSubmissionDetail[] = submissions.map((submission, index) => {
-  const task = tasks.find((item) => item.title === submission.task)
-  const student = students.find((item) => item.name === submission.student)
-
-  return {
-    id: String(submission.id),
-    student: String(submission.student),
-    task: String(submission.task),
-    course: task?.course || student?.course || 'Course not selected',
-    batch: task?.batch || student?.batch || 'Batch not selected',
-    mentor: String(submission.mentor),
-    submitted: String(submission.submitted),
-    status: String(submission.status),
-    fileName:
-      index === 0
-        ? 'meta-ads-funnel-plan.pdf'
-        : index === 1
-          ? 'portfolio-landing-page.zip'
-          : 'bedroom-interior-render.jpg',
-    studentNote:
-      index === 0
-        ? 'I completed the campaign funnel plan with objective, audience, creative direction, budget split and KPI structure.'
-        : index === 1
-          ? 'I submitted the landing page source file, preview screenshot and responsive layout.'
-          : 'Final bedroom interior render uploaded with lighting setup, materials and camera output.',
-    mentorMark: index === 1 ? '' : String(submission.mentorScore || '82'),
-    mentorComment:
-      index === 0
-        ? 'Good structure. Improve the budget split explanation and add one more creative reference.'
-        : index === 1
-          ? ''
-          : 'Strong render quality with good lighting balance.',
-    mentorDecision: index === 1 ? 'Pending' : 'Approved',
-    hodMark: index === 2 ? '84' : '',
-    hodComment: index === 2 ? 'Approved for final QA check. Presentation quality is good.' : '',
-    hodDecision: index === 2 ? 'Approved' : 'Pending',
-    qaMark: '',
-    qaComment: '',
-    qaDecision: 'Pending',
-  }
-})
+import { useAuth } from '@/lib/auth/provider'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
+import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import {
+  fetchTaskSubmissionById,
+  getFinalSubmissionStatus,
+  getStudentResubmitHref,
+  openTaskSubmissionFile,
+  updateTaskSubmissionReview,
+  type ReviewDecision,
+  type TaskSubmissionDetailRow,
+} from '@/lib/data/task-submissions'
+import { createClient } from '@/lib/supabase/client'
 
 function getDecisionClass(decision: string) {
   const value = decision.toLowerCase()
@@ -90,36 +35,19 @@ function getDecisionClass(decision: string) {
   return 'border-border bg-background text-foreground'
 }
 
-function getFinalStatus(submission: DemoSubmissionDetail) {
-  if (submission.qaDecision === 'Approved') {
-    return 'Final QA Approved'
-  }
+function formatRoleLabel(parentRoleId: string | null, roleName?: string) {
+  if (roleName) return roleName
+  if (!parentRoleId) return 'User'
+  return parentRoleId
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
 
-  if (submission.qaDecision === 'Rejected') {
-    return 'Rejected by Final QA'
-  }
-
-  if (submission.hodDecision === 'Approved') {
-    return 'Waiting for Final QA'
-  }
-
-  if (submission.hodDecision === 'Rejected') {
-    return 'Rejected by HOD'
-  }
-
-  if (submission.mentorDecision === 'Approved') {
-    return 'Waiting for HOD'
-  }
-
-  if (submission.mentorDecision === 'Rejected') {
-    return 'Rejected by Mentor'
-  }
-
-  if (submission.mentorDecision === 'Revision Requested' || submission.hodDecision === 'Revision Requested' || submission.qaDecision === 'Revision Requested') {
-    return 'Revision Requested'
-  }
-
-  return 'Waiting for Mentor Review'
+async function getAccessToken() {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token || null
 }
 
 function ReviewBlock({
@@ -129,6 +57,14 @@ function ReviewBlock({
   comment,
   decision,
   canReview,
+  saving,
+  showResubmitDeadline,
+  resubmitDeadlineDate,
+  resubmitDeadlineTime,
+  resubmitUseTime,
+  onResubmitDeadlineDateChange,
+  onResubmitDeadlineTimeChange,
+  onResubmitUseTimeChange,
   onMarkChange,
   onCommentChange,
   onDecision,
@@ -139,6 +75,14 @@ function ReviewBlock({
   comment: string
   decision: ReviewDecision
   canReview: boolean
+  saving: boolean
+  showResubmitDeadline?: boolean
+  resubmitDeadlineDate?: string
+  resubmitDeadlineTime?: string
+  resubmitUseTime?: boolean
+  onResubmitDeadlineDateChange?: (value: string) => void
+  onResubmitDeadlineTimeChange?: (value: string) => void
+  onResubmitUseTimeChange?: (value: boolean) => void
   onMarkChange: (value: string) => void
   onCommentChange: (value: string) => void
   onDecision: (decision: ReviewDecision) => void
@@ -162,7 +106,7 @@ function ReviewBlock({
           <input
             value={mark}
             onChange={(event) => onMarkChange(event.target.value)}
-            disabled={!canReview}
+            disabled={!canReview || saving}
             placeholder="Example: 85"
             className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] disabled:cursor-not-allowed disabled:opacity-60 dark:focus:border-[#6ee75a]"
           />
@@ -173,7 +117,7 @@ function ReviewBlock({
           <textarea
             value={comment}
             onChange={(event) => onCommentChange(event.target.value)}
-            disabled={!canReview}
+            disabled={!canReview || saving}
             rows={4}
             placeholder="Write review comment, correction note or approval feedback."
             className="w-full resize-none border border-border bg-background px-4 py-3 text-sm outline-none focus:border-[#153e90] disabled:cursor-not-allowed disabled:opacity-60 dark:focus:border-[#6ee75a]"
@@ -181,28 +125,63 @@ function ReviewBlock({
         </div>
       </div>
 
+      {showResubmitDeadline && canReview && (
+        <div className="mt-5 grid gap-4 border border-border bg-background/60 p-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <label className="text-sm font-semibold">Re-upload deadline date</label>
+            <input
+              type="date"
+              value={resubmitDeadlineDate || ''}
+              onChange={(event) => onResubmitDeadlineDateChange?.(event.target.value)}
+              className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <input
+                type="checkbox"
+                checked={Boolean(resubmitUseTime)}
+                onChange={(event) => onResubmitUseTimeChange?.(event.target.checked)}
+                className="h-4 w-4 border border-border"
+              />
+              Set re-upload time (optional)
+            </label>
+            <input
+              type="time"
+              value={resubmitDeadlineTime || ''}
+              disabled={!resubmitUseTime}
+              onChange={(event) => onResubmitDeadlineTimeChange?.(event.target.value)}
+              className="h-11 w-full border border-border bg-background px-4 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:[color-scheme:dark]"
+            />
+          </div>
+        </div>
+      )}
+
       {canReview && (
         <div className="mt-5 flex flex-wrap gap-3">
           <button
             type="button"
+            disabled={saving}
             onClick={() => onDecision('Approved')}
-            className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
+            className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
           >
             Approve
           </button>
 
           <button
             type="button"
+            disabled={saving}
             onClick={() => onDecision('Revision Requested')}
-            className="border border-border px-5 py-2.5 text-sm font-semibold hover:bg-accent"
+            className="border border-border px-5 py-2.5 text-sm font-semibold hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             Request Revision
           </button>
 
           <button
             type="button"
+            disabled={saving}
             onClick={() => onDecision('Rejected')}
-            className="border border-red-500/30 bg-red-500/10 px-5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-500/15 dark:text-red-200"
+            className="border border-red-500/30 bg-red-500/10 px-5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-200"
           >
             Reject
           </button>
@@ -214,66 +193,245 @@ function ReviewBlock({
 
 export default function Page() {
   const params = useParams()
-  const { role } = useDemoAuth()
   const submissionId = String(params?.id || '')
+  const { can, role, parentRoleId, user } = useAuth()
+  const { activeBranchId, loading: branchLoading } = useBranchScope()
 
-  const selectedSubmission = useMemo(() => {
-    return demoSubmissionDetails.find((submission) => submission.id === submissionId) || demoSubmissionDetails[0]
-  }, [submissionId])
-
-  const [submission, setSubmission] = useState<DemoSubmissionDetail>(selectedSubmission)
+  const [submission, setSubmission] = useState<TaskSubmissionDetailRow | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [resubmitDeadlineDate, setResubmitDeadlineDate] = useState('')
+  const [resubmitUseTime, setResubmitUseTime] = useState(false)
+  const [resubmitDeadlineTime, setResubmitDeadlineTime] = useState('')
 
-  const isStudent = role?.id === 'student'
-  const ismentor = role?.id === 'mentor' || role?.id === 'mentor'
-  const isHod = role?.id === 'hod'
-  const isFinalQa = role?.id === 'final-qa'
-  const isAdminLevel = role?.id === 'super-admin' || role?.id === 'admin' || role?.id === 'branch-admin' || role?.id === 'branch-controller'
+  const isStudent = isStudentMyCoursesView(parentRoleId)
 
-  const canMentorReview = !isStudent && (ismentor || isAdminLevel)
-  const canHodReview = !isStudent && (isHod || isAdminLevel)
-  const canQaReview = !isStudent && (isFinalQa || isAdminLevel)
+  const canMentorReview = !isStudent && can('submissions.review')
+  const canHodReview = !isStudent && (can('hod_review.review') || can('hod_review.approve'))
+  const canQaReview = !isStudent && (can('final_qa.validate') || can('final_qa.approve'))
 
-  const handleMentorDecision = (decision: ReviewDecision) => {
-    if (!submission.mentorMark.trim() && decision === 'Approved') {
-      setNotice('Please add mentor mark before approval.')
+  useEffect(() => {
+    if (!submissionId || branchLoading || !user?.id) return
+
+    if (!isStudent && !activeBranchId) {
+      setLoading(false)
       return
     }
 
-    setSubmission((prev) => ({
-      ...prev,
-      mentorDecision: decision,
-      status: decision === 'Approved' ? 'Mentor Reviewed' : decision,
-    }))
-    setNotice(`Mentor decision updated as ${decision}.`)
+    let cancelled = false
+
+    async function loadSubmission() {
+      setLoading(true)
+      setError(null)
+
+      const { batches } = await fetchAccessibleBatches({
+        branchId: activeBranchId || '',
+        userId: user!.id,
+        parentRoleId,
+      })
+
+      if (cancelled) return
+
+      const lookup = new Map(
+        batches.map((batch) => [
+          batch.id,
+          {
+            name: batch.name,
+            courseName: batch.course_name,
+            enrolledCount: batch.enrolled_count,
+          },
+        ]),
+      )
+
+      const result = await fetchTaskSubmissionById(submissionId, { batchLookup: lookup })
+
+      if (cancelled) return
+
+      setSubmission(result.data)
+      if (result.data?.resubmitDeadlineDate) {
+        setResubmitDeadlineDate(result.data.resubmitDeadlineDate)
+        setResubmitUseTime(Boolean(result.data.resubmitDeadlineTime))
+        setResubmitDeadlineTime(result.data.resubmitDeadlineTime || '')
+      }
+      setError(result.error || (result.data ? null : 'Submission not found or not in your scope.'))
+      setLoading(false)
+    }
+
+    void loadSubmission()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeBranchId, branchLoading, isStudent, parentRoleId, submissionId, user?.id])
+
+  const finalStatus = useMemo(() => {
+    if (!submission) return ''
+    return getFinalSubmissionStatus(submission)
+  }, [submission])
+
+  const saveReview = async (stage: 'mentor' | 'hod' | 'qa', decision: ReviewDecision) => {
+    if (!submission) return
+
+    const mark =
+      stage === 'mentor' ? submission.mentorMark : stage === 'hod' ? submission.hodMark : submission.qaMark
+    const comment =
+      stage === 'mentor' ? submission.mentorComment : stage === 'hod' ? submission.hodComment : submission.qaComment
+
+    if (decision === 'Approved' && !mark.trim()) {
+      setNotice('Please add a mark before approval.')
+      return
+    }
+
+    if ((decision === 'Rejected' || decision === 'Revision Requested') && !resubmitDeadlineDate) {
+      setNotice('Please set a re-upload deadline date before reject or revision.')
+      return
+    }
+
+    const accessToken = await getAccessToken()
+
+    if (!accessToken) {
+      setNotice('Session expired. Please login again.')
+      return
+    }
+
+    setSaving(true)
+    setNotice('')
+
+    const result = await updateTaskSubmissionReview(
+      {
+        submissionId: submission.id,
+        stage,
+        mark,
+        comment,
+        decision,
+        resubmitDeadlineDate:
+          decision === 'Rejected' || decision === 'Revision Requested' ? resubmitDeadlineDate : undefined,
+        resubmitDeadlineTime:
+          (decision === 'Rejected' || decision === 'Revision Requested') && resubmitUseTime
+            ? resubmitDeadlineTime
+            : undefined,
+      },
+      accessToken,
+    )
+
+    setSaving(false)
+
+    if (!result.ok) {
+      setNotice(result.error || 'Failed to save review.')
+      return
+    }
+
+    setSubmission((current) => {
+      if (!current) return current
+
+      const next = { ...current, status: decision === 'Approved' ? current.status : decision === 'Rejected' ? 'Rejected' : 'Revision Requested' }
+
+      if (stage === 'mentor') {
+        return {
+          ...next,
+          mentorDecision: decision,
+          mentorStatus: decision === 'Pending' ? 'Pending' : 'Reviewed',
+          canResubmit: decision === 'Rejected' || decision === 'Revision Requested',
+          resubmitDeadlineDisplay:
+            decision === 'Rejected' || decision === 'Revision Requested'
+              ? `${resubmitDeadlineDate}${resubmitUseTime && resubmitDeadlineTime ? ` · ${resubmitDeadlineTime}` : ''}`
+              : current.resubmitDeadlineDisplay,
+          resubmitDeadlineDate:
+            decision === 'Rejected' || decision === 'Revision Requested' ? resubmitDeadlineDate : current.resubmitDeadlineDate,
+          resubmitDeadlineTime:
+            (decision === 'Rejected' || decision === 'Revision Requested') && resubmitUseTime
+              ? resubmitDeadlineTime
+              : current.resubmitDeadlineTime,
+        }
+      }
+
+      if (stage === 'hod') {
+        return {
+          ...next,
+          hodDecision: decision,
+          hodStatus: decision,
+          canResubmit: decision === 'Rejected' || decision === 'Revision Requested',
+          resubmitDeadlineDisplay:
+            decision === 'Rejected' || decision === 'Revision Requested'
+              ? `${resubmitDeadlineDate}${resubmitUseTime && resubmitDeadlineTime ? ` · ${resubmitDeadlineTime}` : ''}`
+              : current.resubmitDeadlineDisplay,
+        }
+      }
+
+      return {
+        ...next,
+        qaDecision: decision,
+        qaStatus: decision,
+        canResubmit: decision === 'Rejected' || decision === 'Revision Requested',
+      }
+    })
+
+    setNotice(`${stage === 'mentor' ? 'Mentor' : stage === 'hod' ? 'HOD' : 'Final QA'} decision saved as ${decision}.`)
   }
 
-  const handleHodDecision = (decision: ReviewDecision) => {
-    if (!submission.hodMark.trim() && decision === 'Approved') {
-      setNotice('Please add HOD mark before approval.')
+  const handlePreviewHistoryFile = async (attempt: number) => {
+    if (!submission) return
+
+    const accessToken = await getAccessToken()
+
+    if (!accessToken) {
+      setNotice('Session expired. Please login again.')
       return
     }
 
-    setSubmission((prev) => ({
-      ...prev,
-      hodDecision: decision,
-      status: decision === 'Approved' ? 'HOD Reviewed' : decision,
-    }))
-    setNotice(`HOD decision updated as ${decision}.`)
+    const result = await openTaskSubmissionFile(submission, accessToken, 'view', { historyAttempt: attempt })
+
+    if (!result.ok) {
+      setNotice(result.error || 'Failed to open submission file.')
+    }
   }
 
-  const handleQaDecision = (decision: ReviewDecision) => {
-    if (!submission.qaMark.trim() && decision === 'Approved') {
-      setNotice('Please add Final QA mark before approval.')
+  const handlePreviewFile = async () => {
+    if (!submission) return
+
+    const accessToken = await getAccessToken()
+
+    if (!accessToken) {
+      setNotice('Session expired. Please login again.')
       return
     }
 
-    setSubmission((prev) => ({
-      ...prev,
-      qaDecision: decision,
-      status: decision === 'Approved' ? 'Final QA Approved' : decision,
-    }))
-    setNotice(`Final QA decision updated as ${decision}.`)
+    const result = await openTaskSubmissionFile(submission, accessToken, 'view')
+
+    if (!result.ok) {
+      setNotice(result.error || 'Failed to open submission file.')
+    }
+  }
+
+  if (!can('submissions.view')) {
+    return (
+      <div className="border border-border bg-card p-8">
+        <h1 className="text-2xl font-bold">Submission Locked</h1>
+        <p className="mt-2 text-muted-foreground">Your current permission cannot view this submission.</p>
+      </div>
+    )
+  }
+
+  if (loading || branchLoading) {
+    return (
+      <div className="border border-border bg-card p-8 text-sm text-muted-foreground">Loading submission details…</div>
+    )
+  }
+
+  if (!submission) {
+    return (
+      <div className="space-y-4">
+        <Link href="/task-submissions" className="inline-flex border border-border px-4 py-2 text-sm font-semibold hover:bg-accent">
+          Back to Task Submissions
+        </Link>
+        <div className="border border-border bg-card p-8">
+          <h1 className="text-2xl font-bold">Submission Not Found</h1>
+          <p className="mt-2 text-muted-foreground">{error || 'This submission is not available in your scope.'}</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -290,13 +448,13 @@ export default function Page() {
         </div>
 
         <div className="border border-[#153e90]/25 bg-card px-4 py-3 text-sm">
-          <span className="font-semibold">Current role:</span> {role?.name || 'Not selected'}
+          <span className="font-semibold">Current role:</span> {formatRoleLabel(parentRoleId, role?.name)}
         </div>
       </div>
 
-      {notice && (
+      {(notice || error) && (
         <div className="border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
-          {notice}
+          {notice || error}
         </div>
       )}
 
@@ -309,8 +467,8 @@ export default function Page() {
                 <p className="mt-1 text-sm text-muted-foreground">Submitted by {submission.student}</p>
               </div>
 
-              <span className={`inline-flex whitespace-nowrap border px-3 py-1 text-xs font-semibold ${getDecisionClass(getFinalStatus(submission))}`}>
-                {getFinalStatus(submission)}
+              <span className={`inline-flex whitespace-nowrap border px-3 py-1 text-xs font-semibold ${getDecisionClass(finalStatus)}`}>
+                {finalStatus}
               </span>
             </div>
 
@@ -334,62 +492,162 @@ export default function Page() {
                 <div className="text-xs text-muted-foreground">Submitted Date</div>
                 <div className="mt-1 font-semibold">{submission.submitted}</div>
               </div>
+              <div className="border border-border bg-background/60 p-4">
+                <div className="text-xs text-muted-foreground">Re-submission Date</div>
+                <div className="mt-1 font-semibold">{submission.resubmitted}</div>
+              </div>
+
+              <div className="border border-border bg-background/60 p-4">
+                <div className="text-xs text-muted-foreground">Submit Attempts</div>
+                <div className="mt-1 font-semibold">{submission.submitAttempts}</div>
+              </div>
+
+              <div className="border border-border bg-background/60 p-4">
+                <div className="text-xs text-muted-foreground">Re-upload Deadline</div>
+                <div className="mt-1 font-semibold">{submission.resubmitDeadlineDisplay}</div>
+              </div>
             </div>
+
+            {isStudent && submission.canResubmit && (
+              <div className="mt-5 border border-[#153e90]/25 bg-[#153e90]/10 p-4">
+                <p className="text-sm text-[#153e90] dark:text-white">
+                  Your submission was rejected or needs revision. Re-upload before {submission.resubmitDeadlineDisplay}.
+                </p>
+                <Link
+                  href={getStudentResubmitHref(submission.taskId)}
+                  className="mt-4 inline-flex bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black"
+                >
+                  Re-upload Submission
+                </Link>
+              </div>
+            )}
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div className="border border-border bg-background/60 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Uploaded File</div>
                 <div className="mt-2 font-semibold">{submission.fileName}</div>
-                <button
-                  type="button"
-                  onClick={() => setNotice('Demo file preview opened. Real file will be loaded from Supabase storage.')}
-                  className="mt-4 border border-border px-4 py-2 text-xs font-semibold hover:bg-accent"
-                >
-                  Preview File
-                </button>
+                {submission.filePath && (
+                  <button
+                    type="button"
+                    onClick={() => void handlePreviewFile()}
+                    className="mt-4 border border-border px-4 py-2 text-xs font-semibold hover:bg-accent"
+                  >
+                    Preview File
+                  </button>
+                )}
               </div>
 
               <div className="border border-border bg-background/60 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Student Note</div>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">{submission.studentNote}</p>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  {submission.studentNote || 'No note added.'}
+                </p>
               </div>
             </div>
           </div>
 
+          {submission.submissionHistory.length > 0 && (
+            <div className="border border-border bg-card p-5">
+              <h3 className="text-lg font-bold">Submission History</h3>
+              <p className="mt-1 text-sm text-muted-foreground">Every submit and re-upload attempt is stored here.</p>
+
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[720px] border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40 text-left">
+                      <th className="px-4 py-3 font-semibold">Attempt</th>
+                      <th className="px-4 py-3 font-semibold">Type</th>
+                      <th className="px-4 py-3 font-semibold">Submitted At</th>
+                      <th className="px-4 py-3 font-semibold">File</th>
+                      <th className="px-4 py-3 font-semibold">Note</th>
+                      <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {submission.submissionHistory.map((entry) => (
+                      <tr key={entry.attempt} className="border-b border-border">
+                        <td className="px-4 py-3 font-semibold">{entry.attempt}</td>
+                        <td className="px-4 py-3 capitalize text-muted-foreground">{entry.type}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{entry.submitted_at.slice(0, 16).replace('T', ' ')}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{entry.file_name || '-'}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{entry.student_note || '-'}</td>
+                        <td className="px-4 py-3 text-right">
+                          {entry.file_path && (
+                            <button
+                              type="button"
+                              onClick={() => void handlePreviewHistoryFile(entry.attempt)}
+                              className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
+                            >
+                              View
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <ReviewBlock
             title="Mentor Review"
-            roleLabel="Mentor / mentor"
-            mark={submission.mentorMark}
+            roleLabel="Mentor / Trainer"
+            mark={submission.mentorMark === '-' ? '' : submission.mentorMark}
             comment={submission.mentorComment}
             decision={submission.mentorDecision}
             canReview={canMentorReview}
-            onMarkChange={(value) => setSubmission((prev) => ({ ...prev, mentorMark: value }))}
-            onCommentChange={(value) => setSubmission((prev) => ({ ...prev, mentorComment: value }))}
-            onDecision={handleMentorDecision}
+            saving={saving}
+            showResubmitDeadline={canMentorReview}
+            resubmitDeadlineDate={resubmitDeadlineDate}
+            resubmitDeadlineTime={resubmitDeadlineTime}
+            resubmitUseTime={resubmitUseTime}
+            onResubmitDeadlineDateChange={setResubmitDeadlineDate}
+            onResubmitDeadlineTimeChange={setResubmitDeadlineTime}
+            onResubmitUseTimeChange={setResubmitUseTime}
+            onMarkChange={(value) => setSubmission((prev) => (prev ? { ...prev, mentorMark: value } : prev))}
+            onCommentChange={(value) => setSubmission((prev) => (prev ? { ...prev, mentorComment: value } : prev))}
+            onDecision={(decision) => void saveReview('mentor', decision)}
           />
 
           <ReviewBlock
             title="HOD Review"
             roleLabel="HOD"
-            mark={submission.hodMark}
+            mark={submission.hodMark === '-' ? '' : submission.hodMark}
             comment={submission.hodComment}
             decision={submission.hodDecision}
             canReview={canHodReview}
-            onMarkChange={(value) => setSubmission((prev) => ({ ...prev, hodMark: value }))}
-            onCommentChange={(value) => setSubmission((prev) => ({ ...prev, hodComment: value }))}
-            onDecision={handleHodDecision}
+            saving={saving}
+            showResubmitDeadline={canHodReview}
+            resubmitDeadlineDate={resubmitDeadlineDate}
+            resubmitDeadlineTime={resubmitDeadlineTime}
+            resubmitUseTime={resubmitUseTime}
+            onResubmitDeadlineDateChange={setResubmitDeadlineDate}
+            onResubmitDeadlineTimeChange={setResubmitDeadlineTime}
+            onResubmitUseTimeChange={setResubmitUseTime}
+            onMarkChange={(value) => setSubmission((prev) => (prev ? { ...prev, hodMark: value } : prev))}
+            onCommentChange={(value) => setSubmission((prev) => (prev ? { ...prev, hodComment: value } : prev))}
+            onDecision={(decision) => void saveReview('hod', decision)}
           />
 
           <ReviewBlock
             title="Final QA Review"
             roleLabel="Final QA"
-            mark={submission.qaMark}
+            mark={submission.qaMark === '-' ? '' : submission.qaMark}
             comment={submission.qaComment}
             decision={submission.qaDecision}
             canReview={canQaReview}
-            onMarkChange={(value) => setSubmission((prev) => ({ ...prev, qaMark: value }))}
-            onCommentChange={(value) => setSubmission((prev) => ({ ...prev, qaComment: value }))}
-            onDecision={handleQaDecision}
+            saving={saving}
+            showResubmitDeadline={canQaReview}
+            resubmitDeadlineDate={resubmitDeadlineDate}
+            resubmitDeadlineTime={resubmitDeadlineTime}
+            resubmitUseTime={resubmitUseTime}
+            onResubmitDeadlineDateChange={setResubmitDeadlineDate}
+            onResubmitDeadlineTimeChange={setResubmitDeadlineTime}
+            onResubmitUseTimeChange={setResubmitUseTime}
+            onMarkChange={(value) => setSubmission((prev) => (prev ? { ...prev, qaMark: value } : prev))}
+            onCommentChange={(value) => setSubmission((prev) => (prev ? { ...prev, qaComment: value } : prev))}
+            onDecision={(decision) => void saveReview('qa', decision)}
           />
         </div>
 
@@ -400,17 +658,17 @@ export default function Page() {
             <div className="mt-5 space-y-3 text-sm">
               <div className="flex items-center justify-between border border-border bg-background/60 p-3">
                 <span className="text-muted-foreground">Mentor Mark</span>
-                <span className="font-bold">{submission.mentorMark || '-'}</span>
+                <span className="font-bold">{submission.mentorMark}</span>
               </div>
 
               <div className="flex items-center justify-between border border-border bg-background/60 p-3">
                 <span className="text-muted-foreground">HOD Mark</span>
-                <span className="font-bold">{submission.hodMark || '-'}</span>
+                <span className="font-bold">{submission.hodMark}</span>
               </div>
 
               <div className="flex items-center justify-between border border-border bg-background/60 p-3">
                 <span className="text-muted-foreground">Final QA Mark</span>
-                <span className="font-bold">{submission.qaMark || '-'}</span>
+                <span className="font-bold">{submission.qaMark}</span>
               </div>
             </div>
           </div>
@@ -421,7 +679,10 @@ export default function Page() {
             <div className="mt-5 space-y-3 text-sm">
               <div className={`border p-3 ${getDecisionClass('Approved')}`}>
                 <div className="font-semibold">Student Submitted</div>
-                <div className="mt-1 text-xs">File uploaded on {submission.submitted}</div>
+                <div className="mt-1 text-xs">Submitted on {submission.submitted}</div>
+                {submission.resubmitted !== '-' && (
+                  <div className="mt-1 text-xs">Last re-upload on {submission.resubmitted}</div>
+                )}
               </div>
 
               <div className={`border p-3 ${getDecisionClass(submission.mentorDecision)}`}>
@@ -439,24 +700,6 @@ export default function Page() {
                 <div className="mt-1 text-xs">{submission.qaDecision}</div>
               </div>
             </div>
-          </div>
-
-          <div className="border border-border bg-card p-5">
-            <h3 className="text-lg font-bold">Demo Notes</h3>
-            <ul className="mt-4 space-y-3 text-sm text-muted-foreground">
-              <li className="flex gap-2">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                Each stage can give separate mark and comment.
-              </li>
-              <li className="flex gap-2">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                Reviewers can approve, reject or request revision.
-              </li>
-              <li className="flex gap-2">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                In Supabase, each review action will be saved with reviewer ID and timestamp.
-              </li>
-            </ul>
           </div>
         </aside>
       </div>

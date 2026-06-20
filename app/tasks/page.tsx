@@ -1,62 +1,21 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-import { useDemoAuth } from '@/lib/demo/auth'
-import { batches, courses, mentors, students, tasks } from '@/lib/demo/seed'
-
-type TaskFrequency = 'Daily' | 'Weekly' | 'One-time'
-
-type DemoTask = {
-  id: string
-  title: string
-  description: string
-  course: string
-  batch: string
-  assignedBy: string
-  frequency: TaskFrequency
-  due: string
-  submissions: string
-  status: string
-  fileRequirement: string
-  attachmentName?: string
-}
-
-const today = new Date().toISOString().slice(0, 10)
-
-const existingTasks: DemoTask[] = tasks.map((task, index) => ({
-  id: String(task.id),
-  title: String(task.title),
-  description:
-    index === 0
-      ? 'Create a complete Meta Ads funnel plan including campaign objective, audience, creative direction, ad copy, budget split, and reporting KPIs.'
-      : index === 1
-        ? 'Build a simple portfolio landing page with hero section, about section, project cards, contact section, and responsive layout.'
-        : 'Create a bedroom interior render with proper lighting, material setup, camera angle, and final presentation output.',
-  course: String(task.course),
-  batch: String(task.batch),
-  assignedBy: String(task.assignedBy),
-  frequency: index === 0 ? 'Daily' : index === 1 ? 'Weekly' : 'One-time',
-  due: String(task.due),
-  submissions: String(task.submissions),
-  status: String(task.status),
-  fileRequirement:
-    index === 0
-      ? 'Upload PDF strategy document and campaign structure screenshot.'
-      : index === 1
-        ? 'Upload live preview link and source file ZIP.'
-        : 'Upload final JPG render and working source file.',
-  attachmentName: index === 0 ? 'meta-ads-task-brief.pdf' : index === 1 ? 'portfolio-landing-page-brief.pdf' : 'interior-render-reference.pdf',
-}))
-
-function isSubmissionClosed(date: string) {
-  if (!date) return false
-  return today > date
-}
-
-function getSeatCount(seats: string) {
-  const total = seats.split('/')[1]
-  return total ? total.trim() : '0'
-}
+import Link from 'next/link'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAuth } from '@/lib/auth/provider'
+import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
+import { useTasks } from '@/lib/data/hooks/use-tasks'
+import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import {
+  createTask,
+  deleteTask,
+  getStudentTaskSubmitHref,
+  isTaskSubmissionClosed,
+  type TaskFrequency,
+  type TaskListRow,
+} from '@/lib/data/tasks'
+import type { BatchListRow } from '@/lib/data/batches'
+import { createClient } from '@/lib/supabase/client'
 
 function getStatusClass(status: string) {
   const value = status.toLowerCase()
@@ -76,117 +35,222 @@ function getStatusClass(status: string) {
   return 'border-border bg-background text-foreground'
 }
 
+function formatRoleLabel(parentRoleId: string | null, roleName?: string) {
+  if (roleName) return roleName
+
+  if (!parentRoleId) return 'User'
+
+  return parentRoleId
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+async function getAccessToken() {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token || null
+}
+
+const today = new Date().toISOString().slice(0, 10)
+
 export default function Page() {
-  const { can, role, user } = useDemoAuth()
+  const { can, user, role, parentRoleId } = useAuth()
+  const { activeBranchId, loading: branchLoading } = useBranchScope()
 
-  const currentStudent = useMemo(() => {
-    return students.find((student) => student.name === user?.fullName) || students[0]
-  }, [user?.fullName])
-
-  const isStudent = role?.id === 'student'
-  const ismentor = role?.id === 'mentor'
-
-  const visibleBatches = useMemo(() => {
-    if (ismentor && user?.fullName) {
-      return batches.filter((batch) => batch.mentor === user.fullName)
-    }
-
-    if (isStudent) {
-      return batches.filter((batch) => batch.name === currentStudent?.batch)
-    }
-
-    return batches
-  }, [currentStudent?.batch, isStudent, ismentor, user?.fullName])
-
-  const [records, setRecords] = useState<DemoTask[]>(existingTasks)
-  const [selectedTask, setSelectedTask] = useState<DemoTask>(existingTasks[0])
+  const [allowedBatches, setAllowedBatches] = useState<BatchListRow[]>([])
+  const [batchesLoading, setBatchesLoading] = useState(true)
   const [notice, setNotice] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const attachmentRef = useRef<HTMLInputElement | null>(null)
+
+  const isStudent = isStudentMyCoursesView(parentRoleId)
+  const isMentor = parentRoleId === 'mentor'
+
+  const canCreateTask = !isStudent && (can('tasks.create') || can('tasks.assign'))
 
   const [form, setForm] = useState({
     title: '',
     description: '',
-    batch: visibleBatches[0]?.name || '',
+    batchId: '',
     frequency: 'Daily' as TaskFrequency,
     due: today,
+    useScheduledTime: false,
+    dueTime: '',
     fileRequirement: '',
+    attachmentFile: null as File | null,
     attachmentName: '',
   })
 
-  const visibleTasks = useMemo(() => {
-    if (isStudent) {
-      return records.filter((task) => task.batch === currentStudent?.batch)
+  useEffect(() => {
+    if (branchLoading || !user?.id) {
+      setAllowedBatches([])
+      setBatchesLoading(branchLoading)
+      return
     }
 
-    if (ismentor && user?.fullName) {
-      const assignedBatchNames = visibleBatches.map((batch) => batch.name)
-      return records.filter((task) => assignedBatchNames.includes(task.batch) || task.assignedBy === user.fullName)
+    if (!isStudent && !activeBranchId) {
+      setAllowedBatches([])
+      setBatchesLoading(false)
+      return
     }
 
-    return records
-  }, [currentStudent?.batch, isStudent, ismentor, records, user?.fullName, visibleBatches])
+    let cancelled = false
 
-  const selectedBatch = useMemo(() => {
-    return batches.find((batch) => batch.name === form.batch)
-  }, [form.batch])
+    async function loadBatches() {
+      setBatchesLoading(true)
 
-  const selectedCourse = useMemo(() => {
-    return courses.find((course) => course.name === selectedBatch?.course)
-  }, [selectedBatch?.course])
+      const { batches, error } = await fetchAccessibleBatches({
+        branchId: activeBranchId || '',
+        userId: user!.id,
+        parentRoleId,
+      })
 
-  const totalOpen = visibleTasks.filter((task) => task.status === 'Open').length
-  const totalReview = visibleTasks.filter((task) => task.status === 'Review').length
-  const totalClosed = visibleTasks.filter((task) => isSubmissionClosed(task.due)).length
+      if (cancelled) return
 
-  const handleCreateTask = () => {
-    if (!form.title.trim() || !form.description.trim() || !form.batch || !form.due) {
+      setAllowedBatches(batches)
+
+      if (error) {
+        setNotice(error)
+      }
+
+      if (batches.length > 0) {
+        setForm((prev) => ({
+          ...prev,
+          batchId: prev.batchId || batches[0].id,
+        }))
+      }
+
+      setBatchesLoading(false)
+    }
+
+    void loadBatches()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeBranchId, branchLoading, isStudent, parentRoleId, user?.id])
+
+  const batchLookup = useMemo(() => {
+    return new Map(
+      allowedBatches.map((batch) => [
+        batch.id,
+        {
+          name: batch.name,
+          courseName: batch.course_name,
+          enrolledCount: batch.enrolled_count,
+        },
+      ]),
+    )
+  }, [allowedBatches])
+
+  const allowedBatchIds = useMemo(() => allowedBatches.map((batch) => batch.id), [allowedBatches])
+
+  const { tasks, loading, error, reload } = useTasks(allowedBatchIds, {
+    batchLookup,
+    studentProfileId: user?.id,
+    isStudent,
+  })
+
+  const selectedFormBatch = useMemo(
+    () => allowedBatches.find((batch) => batch.id === form.batchId) || null,
+    [allowedBatches, form.batchId],
+  )
+
+  const studentBatchName = isStudent ? allowedBatches[0]?.name : null
+
+  const totalOpen = tasks.filter((task) => task.status === 'Open').length
+  const totalReview = tasks.filter((task) => task.status === 'Review').length
+  const totalClosed = tasks.filter(
+    (task) => isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed',
+  ).length
+
+  const handleCreateTask = async () => {
+    if (!form.title.trim() || !form.description.trim() || !form.batchId || !form.due) {
       setNotice('Please add title, description, batch and submission date.')
       return
     }
 
-    const batch = batches.find((item) => item.name === form.batch)
-    const newTask: DemoTask = {
-      id: `task-${Date.now()}`,
-      title: form.title.trim(),
-      description: form.description.trim(),
-      course: batch?.course || selectedCourse?.name || 'Course not selected',
-      batch: form.batch,
-      assignedBy: user?.fullName || 'Demo Mentor',
-      frequency: form.frequency,
-      due: form.due,
-      submissions: `0/${getSeatCount(String(batch?.seats || '0/0'))}`,
-      status: 'Open',
-      fileRequirement: form.fileRequirement.trim() || 'Student must upload the requested work file before the submission date.',
-      attachmentName: form.attachmentName || undefined,
-    }
+    const accessToken = await getAccessToken()
 
-    setRecords((prev) => [newTask, ...prev])
-    setSelectedTask(newTask)
-    setNotice('Demo task created and assigned to the selected batch.')
-    setForm({
-      title: '',
-      description: '',
-      batch: visibleBatches[0]?.name || '',
-      frequency: 'Daily',
-      due: today,
-      fileRequirement: '',
-      attachmentName: '',
-    })
-  }
-
-  const handleDelete = (id: string) => {
-    const nextRecords = records.filter((task) => task.id !== id)
-    setRecords(nextRecords)
-    setSelectedTask(nextRecords[0] || existingTasks[0])
-    setNotice('Demo task deleted from local state.')
-  }
-
-  const handleSubmitDemo = (task: DemoTask) => {
-    if (isSubmissionClosed(task.due)) {
-      setNotice('Submission date is over. Student cannot submit this task now.')
+    if (!accessToken) {
+      setNotice('Session expired. Please login again.')
       return
     }
 
-    setNotice('Demo submission added. In real system, student file upload will be saved in Supabase storage.')
+    setSubmitting(true)
+    setNotice('')
+
+    const payload = new FormData()
+    payload.append('batchId', form.batchId)
+    payload.append('title', form.title.trim())
+    payload.append('description', form.description.trim())
+    payload.append('frequency', form.frequency)
+    payload.append('dueDate', form.due)
+    payload.append('fileRequirement', form.fileRequirement.trim())
+
+    if (form.useScheduledTime && form.dueTime) {
+      payload.append('dueTime', form.dueTime)
+    }
+
+    if (form.attachmentFile) {
+      payload.append('attachmentFile', form.attachmentFile)
+    }
+
+    const result = await createTask(payload, accessToken)
+    setSubmitting(false)
+
+    if (!result.ok) {
+      setNotice(result.error || 'Failed to create task.')
+      return
+    }
+
+    await reload()
+    setNotice('Task created and assigned to the selected batch.')
+    setForm({
+      title: '',
+      description: '',
+      batchId: allowedBatches[0]?.id || '',
+      frequency: 'Daily',
+      due: today,
+      useScheduledTime: false,
+      dueTime: '',
+      fileRequirement: '',
+      attachmentFile: null,
+      attachmentName: '',
+    })
+
+    if (attachmentRef.current) {
+      attachmentRef.current.value = ''
+    }
+  }
+
+  const handleDelete = async (task: TaskListRow) => {
+    const accessToken = await getAccessToken()
+
+    if (!accessToken) {
+      setNotice('Session expired. Please login again.')
+      return
+    }
+
+    const result = await deleteTask(task.id, accessToken)
+
+    if (!result.ok) {
+      setNotice(result.error || 'Failed to delete task.')
+      return
+    }
+
+    await reload()
+    setNotice('Task deleted.')
+  }
+
+  if (!can('tasks.view')) {
+    return (
+      <div className="border border-border bg-card p-8">
+        <h1 className="text-2xl font-bold">Tasks Locked</h1>
+        <p className="mt-2 text-muted-foreground">Your current permission cannot view tasks.</p>
+      </div>
+    )
   }
 
   return (
@@ -201,13 +265,19 @@ export default function Page() {
         </div>
 
         <div className="border border-[#153e90]/25 bg-card px-4 py-3 text-sm">
-          <span className="font-semibold">Current role:</span> {role?.name || 'Not selected'}
+          <span className="font-semibold">Current role:</span> {formatRoleLabel(parentRoleId, role?.name)}
         </div>
       </div>
 
+      {(error || notice) && (
+        <div className="border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
+          {notice || error}
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="border border-border bg-card p-5">
-          <div className="text-3xl font-bold">{visibleTasks.length}</div>
+          <div className="text-3xl font-bold">{tasks.length}</div>
           <div className="mt-1 text-sm text-muted-foreground">Assigned Tasks</div>
           <div className="mt-3 text-xs text-[#153e90] dark:text-[#6ee75a]">Visible based on role</div>
         </div>
@@ -231,9 +301,8 @@ export default function Page() {
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
-        <div className="space-y-5">
-          {can('tasks.create') && !isStudent && (
+      <div className="space-y-5">
+          {canCreateTask && (
             <div className="border border-border bg-card p-5">
               <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
                 <div>
@@ -241,9 +310,6 @@ export default function Page() {
                   <p className="mt-1 text-sm text-muted-foreground">
                     Assign a task to one batch. Only students in that batch will see it.
                   </p>
-                </div>
-                <div className="border border-[#153e90]/25 bg-[#153e90]/10 px-3 py-2 text-xs font-semibold text-[#153e90] dark:border-[#6ee75a]/25 dark:bg-[#6ee75a]/10 dark:text-white">
-                  Demo local state
                 </div>
               </div>
 
@@ -261,12 +327,13 @@ export default function Page() {
                 <div className="space-y-2">
                   <label className="text-sm font-semibold">Assign to batch</label>
                   <select
-                    value={form.batch}
-                    onChange={(event) => setForm((prev) => ({ ...prev, batch: event.target.value }))}
+                    value={form.batchId}
+                    onChange={(event) => setForm((prev) => ({ ...prev, batchId: event.target.value }))}
+                    disabled={batchesLoading || allowedBatches.length === 0}
                     className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                   >
-                    {visibleBatches.map((batch) => (
-                      <option key={batch.id} value={batch.name}>
+                    {allowedBatches.map((batch) => (
+                      <option key={batch.id} value={batch.id}>
                         {batch.name}
                       </option>
                     ))}
@@ -277,7 +344,9 @@ export default function Page() {
                   <label className="text-sm font-semibold">Assignment type</label>
                   <select
                     value={form.frequency}
-                    onChange={(event) => setForm((prev) => ({ ...prev, frequency: event.target.value as TaskFrequency }))}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, frequency: event.target.value as TaskFrequency }))
+                    }
                     className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                   >
                     <option value="Daily">Daily Assignment</option>
@@ -294,6 +363,34 @@ export default function Page() {
                     onChange={(event) => setForm((prev) => ({ ...prev, due: event.target.value }))}
                     className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={form.useScheduledTime}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          useScheduledTime: event.target.checked,
+                          dueTime: event.target.checked ? prev.dueTime : '',
+                        }))
+                      }
+                      className="h-4 w-4 border border-border"
+                    />
+                    Set submission time (optional)
+                  </label>
+                  <input
+                    type="time"
+                    value={form.dueTime}
+                    disabled={!form.useScheduledTime}
+                    onChange={(event) => setForm((prev) => ({ ...prev, dueTime: event.target.value }))}
+                    className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] disabled:cursor-not-allowed disabled:opacity-60 dark:focus:border-[#6ee75a] dark:[color-scheme:dark]"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Leave unchecked for date-only deadlines. Enable when this task must close at a specific time.
+                  </p>
                 </div>
 
                 <div className="space-y-2 md:col-span-2">
@@ -320,8 +417,16 @@ export default function Page() {
                 <div className="space-y-2">
                   <label className="text-sm font-semibold">Attach brief / reference file</label>
                   <input
+                    ref={attachmentRef}
                     type="file"
-                    onChange={(event) => setForm((prev) => ({ ...prev, attachmentName: event.target.files?.[0]?.name || '' }))}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null
+                      setForm((prev) => ({
+                        ...prev,
+                        attachmentFile: file,
+                        attachmentName: file?.name || '',
+                      }))
+                    }}
                     className="h-11 w-full border border-border bg-background px-4 py-2 text-sm outline-none file:mr-3 file:border-0 file:bg-[#153e90] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-white"
                   />
                 </div>
@@ -330,14 +435,17 @@ export default function Page() {
               <div className="mt-5 flex flex-col justify-between gap-3 border border-border bg-background/60 p-4 md:flex-row md:items-center">
                 <div className="text-sm text-muted-foreground">
                   Selected course:{' '}
-                  <span className="font-semibold text-foreground">{selectedBatch?.course || 'Select batch'}</span>
+                  <span className="font-semibold text-foreground">
+                    {selectedFormBatch?.course_name || 'Select batch'}
+                  </span>
                 </div>
                 <button
                   type="button"
-                  onClick={handleCreateTask}
-                  className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
+                  onClick={() => void handleCreateTask()}
+                  disabled={submitting || batchesLoading || allowedBatches.length === 0}
+                  className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
                 >
-                  Create Task
+                  {submitting ? 'Creating…' : 'Create Task'}
                 </button>
               </div>
             </div>
@@ -347,22 +455,23 @@ export default function Page() {
             <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
               <div>
                 <h2 className="text-xl font-bold">Task Board</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Batch-wise assignment overview for investor presentation.
-                </p>
+                <p className="mt-1 text-sm text-muted-foreground">Batch-wise assignment overview.</p>
               </div>
 
               <div className="flex flex-wrap gap-2 text-xs">
                 <span className="border border-border bg-background px-3 py-2 font-semibold">Today: {today}</span>
-                {isStudent && <span className="border border-[#153e90]/25 bg-[#153e90]/10 px-3 py-2 font-semibold text-[#153e90] dark:text-white">Student batch: {currentStudent?.batch}</span>}
+                {isStudent && studentBatchName && (
+                  <span className="border border-[#153e90]/25 bg-[#153e90]/10 px-3 py-2 font-semibold text-[#153e90] dark:text-white">
+                    Student batch: {studentBatchName}
+                  </span>
+                )}
+                {isMentor && (
+                  <span className="border border-[#153e90]/25 bg-[#153e90]/10 px-3 py-2 font-semibold text-[#153e90] dark:text-white">
+                    Assigned batches only
+                  </span>
+                )}
               </div>
             </div>
-
-            {notice && (
-              <div className="mt-4 border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
-                {notice}
-              </div>
-            )}
 
             <div className="mt-5 overflow-x-auto">
               <table className="w-full min-w-[980px] border-collapse text-sm">
@@ -381,175 +490,98 @@ export default function Page() {
                 </thead>
 
                 <tbody>
-                  {visibleTasks.map((task) => {
-                    const closed = isSubmissionClosed(task.due)
+                  {loading || batchesLoading || branchLoading ? (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                        Loading tasks…
+                      </td>
+                    </tr>
+                  ) : tasks.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                        No tasks found for your scope.
+                      </td>
+                    </tr>
+                  ) : (
+                    tasks.map((task) => {
+                      const closed = isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed'
+                      const displayStatus = closed ? 'Submission Closed' : task.status
 
-                    return (
-                      <tr key={task.id} className="border-b border-border">
-                        <td className="px-4 py-3">
-                          <div className="font-semibold text-foreground">{task.title}</div>
-                          <div className="mt-1 max-w-[260px] truncate text-xs text-muted-foreground">{task.description}</div>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">{task.course}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{task.batch}</td>
-                        <td className="px-4 py-3">
-                          <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">
-                            {task.frequency}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">{task.assignedBy}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{task.due}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{task.submissions}</td>
-                        <td className="px-4 py-3">
-                          <span className={`border px-2 py-1 text-xs font-semibold ${getStatusClass(closed ? 'Closed' : task.status)}`}>
-                            {closed ? 'Submission Closed' : task.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedTask(task)
-                                setNotice('Task preview opened.')
-                              }}
-                              className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
-                            >
-                              View
-                            </button>
-
-                            {isStudent && (
-                              <button
-                                type="button"
-                                disabled={closed}
-                                onClick={() => handleSubmitDemo(task)}
-                                className={
-                                  closed
-                                    ? 'cursor-not-allowed border border-border px-3 py-2 text-xs font-semibold text-muted-foreground opacity-60'
-                                    : 'border border-[#153e90]/30 bg-[#153e90]/10 px-3 py-2 text-xs font-semibold text-[#153e90] hover:bg-[#153e90]/15 dark:border-[#6ee75a]/30 dark:bg-[#6ee75a]/10 dark:text-white'
-                                }
-                              >
-                                {closed ? 'Closed' : 'Submit'}
-                              </button>
-                            )}
-
-                            {can('tasks.edit') && !isStudent && (
-                              <button
-                                type="button"
-                                onClick={() => setNotice('Edit action available in demo. Real edit will update the task record.')}
+                      return (
+                        <tr key={task.id} className="border-b border-border">
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-foreground">{task.title}</div>
+                            <div className="mt-1 max-w-[260px] truncate text-xs text-muted-foreground">
+                              {task.description}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">{task.course}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{task.batch}</td>
+                          <td className="px-4 py-3">
+                            <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">
+                              {task.frequency}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">{task.assignedBy}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{task.dueDisplay}</td>
+                          <td className="px-4 py-3 text-muted-foreground">{task.submissions}</td>
+                          <td className="px-4 py-3">
+                            <span className={`border px-2 py-1 text-xs font-semibold ${getStatusClass(displayStatus)}`}>
+                              {displayStatus}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex justify-end gap-2">
+                              <Link
+                                href={`/tasks/${task.id}`}
                                 className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
                               >
-                                Edit
-                              </button>
-                            )}
+                                View
+                              </Link>
 
-                            {can('tasks.delete') && !isStudent && (
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(task.id)}
-                                className="border border-border px-3 py-2 text-xs font-semibold hover:bg-red-500/10"
-                              >
-                                Delete
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                              {isStudent && can('submissions.submit') && (
+                                closed || task.studentSubmitted ? (
+                                  task.studentSubmitted ? (
+                                    <Link
+                                      href={getStudentTaskSubmitHref(task)}
+                                      className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
+                                    >
+                                      Submitted
+                                    </Link>
+                                  ) : (
+                                    <span className="cursor-not-allowed border border-border px-3 py-2 text-xs font-semibold text-muted-foreground opacity-60">
+                                      Closed
+                                    </span>
+                                  )
+                                ) : (
+                                  <Link
+                                    href={getStudentTaskSubmitHref(task)}
+                                    className="border border-[#153e90]/30 bg-[#153e90]/10 px-3 py-2 text-xs font-semibold text-[#153e90] hover:bg-[#153e90]/15 dark:border-[#6ee75a]/30 dark:bg-[#6ee75a]/10 dark:text-white"
+                                  >
+                                    Submit
+                                  </Link>
+                                )
+                              )}
+
+                              {can('tasks.delete') && !isStudent && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDelete(task)}
+                                  className="border border-border px-3 py-2 text-xs font-semibold hover:bg-red-500/10"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
-        </div>
-
-        <aside className="space-y-5">
-          <div className="border border-border bg-card p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-bold">Task Preview</h3>
-                <p className="mt-1 text-sm text-muted-foreground">Full assignment details shown from View action.</p>
-              </div>
-              <span className={`border px-2 py-1 text-xs font-semibold ${getStatusClass(isSubmissionClosed(selectedTask?.due || '') ? 'Closed' : selectedTask?.status || '')}`}>
-                {isSubmissionClosed(selectedTask?.due || '') ? 'Closed' : selectedTask?.status}
-              </span>
-            </div>
-
-            <div className="mt-5 space-y-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</div>
-                <div className="mt-1 font-bold">{selectedTask?.title}</div>
-              </div>
-
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Description</div>
-                <p className="mt-1 text-sm leading-6 text-muted-foreground">{selectedTask?.description}</p>
-              </div>
-
-              <div className="grid gap-3 text-sm">
-                <div className="border border-border bg-background/60 p-3">
-                  <div className="text-xs text-muted-foreground">Course</div>
-                  <div className="mt-1 font-semibold">{selectedTask?.course}</div>
-                </div>
-
-                <div className="border border-border bg-background/60 p-3">
-                  <div className="text-xs text-muted-foreground">Batch</div>
-                  <div className="mt-1 font-semibold">{selectedTask?.batch}</div>
-                </div>
-
-                <div className="border border-border bg-background/60 p-3">
-                  <div className="text-xs text-muted-foreground">Assignment Type</div>
-                  <div className="mt-1 font-semibold">{selectedTask?.frequency}</div>
-                </div>
-
-                <div className="border border-border bg-background/60 p-3">
-                  <div className="text-xs text-muted-foreground">Submission Date</div>
-                  <div className="mt-1 font-semibold">{selectedTask?.due}</div>
-                </div>
-
-                <div className="border border-border bg-background/60 p-3">
-                  <div className="text-xs text-muted-foreground">File Requirement</div>
-                  <div className="mt-1 font-semibold">{selectedTask?.fileRequirement}</div>
-                </div>
-
-                <div className="border border-border bg-background/60 p-3">
-                  <div className="text-xs text-muted-foreground">Attached Brief</div>
-                  <div className="mt-1 font-semibold">{selectedTask?.attachmentName || 'No file attached'}</div>
-                </div>
-              </div>
-
-              {isStudent && (
-                <div className="border border-[#153e90]/25 bg-[#153e90]/10 p-4 text-sm text-[#153e90] dark:text-white">
-                  {isSubmissionClosed(selectedTask?.due || '')
-                    ? 'Submission date is over. Student cannot submit this task.'
-                    : 'Submission is open. Student can upload the required file before the due date.'}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="border border-border bg-card p-5">
-            <h3 className="text-lg font-bold">Investor Demo Notes</h3>
-            <ul className="mt-4 space-y-3 text-sm text-muted-foreground">
-              <li className="flex gap-2">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                Mentor assigns tasks to a selected batch, not to every student manually.
-              </li>
-              <li className="flex gap-2">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                Daily, weekly and one-time assignments are supported in the same workflow.
-              </li>
-              <li className="flex gap-2">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                Students only see assignments connected to their own batch.
-              </li>
-              <li className="flex gap-2">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#153e90] dark:bg-[#6ee75a]" />
-                After the submission date, the submit action is automatically locked.
-              </li>
-            </ul>
-          </div>
-        </aside>
       </div>
     </div>
   )

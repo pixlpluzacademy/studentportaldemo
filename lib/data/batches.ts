@@ -312,6 +312,40 @@ export async function fetchBatchById(
   }
 }
 
+export async function fetchBatchesByIds(
+  batchIds: string[],
+  supabase?: SupabaseClient,
+): Promise<DataResult<BatchListRow[]>> {
+  const client = supabase ?? createClient()
+
+  if (!batchIds.length) {
+    return { source: 'supabase', data: [] }
+  }
+
+  try {
+    const { data, error } = await client
+      .from('batches')
+      .select(batchSelect)
+      .in('id', batchIds)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      return { source: 'supabase', data: [], error: error.message }
+    }
+
+    return {
+      source: 'supabase',
+      data: (data as DbBatchRow[]).map(mapDbBatchToListRow),
+    }
+  } catch (error) {
+    return {
+      source: 'supabase',
+      data: [],
+      error: error instanceof Error ? error.message : 'Failed to load batches.',
+    }
+  }
+}
+
 export async function fetchBatchList(
   branchId?: string | null,
   supabase?: SupabaseClient,
@@ -358,6 +392,47 @@ export function previewBatchCode(input: {
     startDate: input.startDate,
     existingCodes: input.existingCodes,
   })
+}
+
+export async function updateBatchAccount(
+  batchId: string,
+  input: BatchFormInput,
+  accessToken: string,
+): Promise<{ ok: true; batchId: string; batchCode: string } | { ok: false; error: string }> {
+  try {
+    const response = await fetch('/api/admin/update-batch', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        ...input,
+        batch_id: batchId,
+      }),
+    })
+
+    const payload = (await response.json()) as {
+      error?: string
+      batchId?: string
+      batchCode?: string
+    }
+
+    if (!response.ok) {
+      return { ok: false, error: payload.error || 'Could not update batch.' }
+    }
+
+    if (!payload.batchId || !payload.batchCode) {
+      return { ok: false, error: 'Batch updated but response was incomplete.' }
+    }
+
+    return { ok: true, batchId: payload.batchId, batchCode: payload.batchCode }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not update batch.',
+    }
+  }
 }
 
 export async function createBatchAccount(

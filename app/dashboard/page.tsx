@@ -4,47 +4,18 @@ import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
+import { useAuth } from '@/lib/auth/provider'
+import {
+  buildDashboardView,
+  fetchDashboardStats,
+  getDashboardRoleKey,
+  type ChartItem,
+  type DashboardStats,
+  type SummaryCard,
+} from '@/lib/data/dashboard'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
-import { useDemoAuth } from '@/lib/demo/auth'
-import { demoModules, submissions, tasks, students, batches } from '@/lib/demo/seed'
-import type { ModuleId } from '@/lib/demo/types'
+import { demoModules } from '@/lib/demo/seed'
 import { cn } from '@/lib/utils'
-
-type DashboardRole =
-  | 'superadmin'
-  | 'admin'
-  | 'branch_controller'
-  | 'hod'
-  | 'mentor'
-  | 'final_qa'
-  | 'student'
-  | 'placement'
-
-type SummaryCard = {
-  label: string
-  value: string | number
-  helper: string
-  icon: string
-  moduleId?: ModuleId
-}
-
-type QuickAction = {
-  label: string
-  href: string
-  moduleId: ModuleId
-  icon: string
-}
-
-type PendingItem = {
-  title: string
-  description: string
-  badge: string
-}
-
-type ChartItem = {
-  label: string
-  value: number
-}
 
 function CustomIcon({
   icon,
@@ -69,21 +40,6 @@ function CustomIcon({
       }}
     />
   )
-}
-
-function getRoleKey(roleName?: string, roleId?: string): DashboardRole {
-  const value = `${roleId || ''} ${roleName || ''}`.toLowerCase()
-
-  if (value.includes('super')) return 'superadmin'
-  if (value.includes('branch')) return 'branch_controller'
-  if (value.includes('hod') || value.includes('superior')) return 'hod'
-  if (value.includes('mentor') || value.includes('mentor')) return 'mentor'
-  if (value.includes('final') || value.includes('qa')) return 'final_qa'
-  if (value.includes('student')) return 'student'
-  if (value.includes('placement')) return 'placement'
-  if (value.includes('admin')) return 'admin'
-
-  return 'superadmin'
 }
 
 function StatCard({ card, iconFolder }: { card: SummaryCard; iconFolder: string }) {
@@ -157,725 +113,98 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle: string })
   )
 }
 
+const initialStats: DashboardStats = {
+  studentCount: 0,
+  batchCount: 0,
+  onlineBatchCount: 0,
+  offlineBatchCount: 0,
+  mentorCount: 0,
+  taskCount: 0,
+  openTaskCount: 0,
+  submissionCount: 0,
+  pendingMentorReviewCount: 0,
+  pendingHodReviewCount: 0,
+  pendingQaCount: 0,
+  qaApprovedCount: 0,
+  revisionCount: 0,
+  openComplaintsCount: 0,
+  classMaterialsCount: 0,
+  attendanceAveragePercent: 0,
+  studentAttendancePercent: 0,
+  studentPendingTasks: 0,
+  studentSubmittedTasks: 0,
+  studentAverageMark: 0,
+  studentOpenComplaints: 0,
+  studentTaskProgress: 0,
+}
+
 export default function DashboardPage() {
-  const { role, user, canModule } = useDemoAuth()
+  const { role, user, canModule, parentRoleId } = useAuth()
   const { resolvedTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
+  const [stats, setStats] = useState<DashboardStats>(initialStats)
+  const [statsLoading, setStatsLoading] = useState(true)
+
+  const { activeBranch, activeBranchId, loading: branchLoading } = useBranchScope()
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
+  useEffect(() => {
+    if (!user?.id) {
+      setStatsLoading(false)
+      return
+    }
+
+    if (branchLoading && parentRoleId !== 'student') {
+      setStatsLoading(true)
+      return
+    }
+
+    let cancelled = false
+
+    async function loadStats() {
+      setStatsLoading(true)
+
+      const result = await fetchDashboardStats({
+        branchId: activeBranchId,
+        userId: user!.id,
+        parentRoleId,
+      })
+
+      if (!cancelled) {
+        setStats(result)
+        setStatsLoading(false)
+      }
+    }
+
+    void loadStats()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeBranchId, branchLoading, parentRoleId, user?.id])
+
   const iconFolder = mounted && resolvedTheme === 'light' ? 'light-mode' : 'dark-mode'
 
-  const roleKey = getRoleKey(role?.name, role?.id)
-  const visibleModules = demoModules.filter((module) => canModule(module.id))
+  const roleKey = getDashboardRoleKey(parentRoleId, role?.name, role?.id)
 
-  const { activeBranch, filterByActiveBatches, activeDemoBatchNames } = useBranchScope()
-
-  const branchStudents = useMemo(
-    () => filterByActiveBatches(students, (student) => student.batch),
-    [filterByActiveBatches],
-  )
-
-  const branchBatches = useMemo(
-    () => batches.filter((batch) => activeDemoBatchNames.includes(batch.name)),
-    [activeDemoBatchNames],
-  )
-
-  const branchSubmissions = useMemo(
+  const data = useMemo(
     () =>
-      filterByActiveBatches(submissions, (item) => {
-        const student = students.find((entry) => entry.name === item.student)
-        return student?.batch || ''
+      buildDashboardView({
+        roleKey,
+        stats,
+        userName: user?.fullName,
+        branchCode: activeBranch?.code ?? undefined,
+        branchName: activeBranch?.name ?? undefined,
       }),
-    [filterByActiveBatches],
+    [activeBranch?.code, activeBranch?.name, roleKey, stats, user?.fullName],
   )
-
-  const getBranchBatchCount = (mode?: string) => {
-    if (!mode) return branchBatches.length
-    return branchBatches.filter((batch) => String(batch.mode || '').toLowerCase() === mode).length
-  }
-
-  const commonAdminCards: SummaryCard[] = [
-    {
-      label: 'Active Branch',
-      value: activeBranch?.code || activeBranch?.name || '—',
-      helper: activeBranch?.name || 'Branch selected in header',
-      icon: 'workstream.svg',
-      moduleId: 'branches',
-    },
-    {
-      label: 'Total Students',
-      value: branchStudents.length,
-      helper: 'All active academic records',
-      icon: 'students.svg',
-      moduleId: 'students',
-    },
-    {
-      label: 'Active Batches',
-      value: branchBatches.length,
-      helper: 'Running online and offline batches',
-      icon: 'patch.svg',
-      moduleId: 'batches',
-    },
-    {
-      label: 'Online Batches',
-      value: getBranchBatchCount('online') || 0,
-      helper: 'Zoom integration can support attendance',
-      icon: 'workstream.svg',
-      moduleId: 'batches',
-    },
-    {
-      label: 'Offline Batches',
-      value: getBranchBatchCount('offline') || 0,
-      helper: 'Manual attendance required',
-      icon: 'attendance.svg',
-      moduleId: 'attendance',
-    },
-    {
-      label: 'Pending Approvals',
-      value: 12,
-      helper: 'Role, batch, and academic approvals',
-      icon: 'reviews.svg',
-      moduleId: 'roles',
-    },
-    {
-      label: 'Final QA Pending',
-      value: branchSubmissions.length,
-      helper: 'Waiting for final validation',
-      icon: 'reviews.svg',
-      moduleId: 'final_qa',
-    },
-    {
-      label: 'Open Complaints',
-      value: 4,
-      helper: 'Student support requests',
-      icon: 'admission.svg',
-      moduleId: 'complaints',
-    },
-  ]
-
-  const dashboardData: Record<
-    DashboardRole,
-    {
-      title: string
-      subtitle: string
-      badge: string
-      cards: SummaryCard[]
-      pendingTitle: string
-      pendingItems: PendingItem[]
-      quickActions: QuickAction[]
-      chartTitle: string
-      chartData: ChartItem[]
-    }
-  > = {
-    superadmin: {
-      title: `Welcome, ${user?.fullName || 'Chairman'}`,
-      subtitle:
-        'Full pixlpluzportal system overview across all branches. Super Admin controls roles, branches, permissions, users, reports, and all academic operations.',
-      badge: 'Chairman / Super Admin',
-      cards: commonAdminCards,
-      pendingTitle: 'Today / Pending System Actions',
-      pendingItems: [
-        {
-          title: 'Final QA validation waiting',
-          description: 'Several submissions are ready for final score validation and lock.',
-          badge: 'Final QA',
-        },
-        {
-          title: 'Branch controller setup',
-          description: 'New branch-level admin access can be created and assigned.',
-          badge: 'Branch',
-        },
-        {
-          title: 'Open complaints',
-          description: 'High priority academic complaints require attention.',
-          badge: 'Support',
-        },
-      ],
-      quickActions: [
-        { label: 'Create Role', href: '/role-management', moduleId: 'roles', icon: 'workstream.svg' },
-        { label: 'Add Branch', href: '/branches', moduleId: 'branches', icon: 'patch.svg' },
-        { label: 'Add User', href: '/users', moduleId: 'users', icon: 'users.svg' },
-        { label: 'View Reports', href: '/reports', moduleId: 'reports', icon: 'analytics.svg' },
-        { label: 'Manage Permissions', href: '/role-management', moduleId: 'roles', icon: 'reviews.svg' },
-      ],
-      chartTitle: 'System Performance Overview',
-      chartData: [
-        { label: 'Students', value: branchStudents.length },
-        { label: 'Batches', value: branchBatches.length },
-        { label: 'Tasks', value: tasks.length },
-        { label: 'QA Pending', value: branchSubmissions.length },
-        { label: 'Complaints', value: 4 },
-      ],
-    },
-
-    admin: {
-      title: `Welcome, ${user?.fullName || 'CEO'}`,
-      subtitle:
-        'Company Admin manages pixlpluzportal operations under Super Admin control. Admin can manage branches, users, reports, and permissions only when allowed.',
-      badge: 'CEO / Company Admin',
-      cards: commonAdminCards,
-      pendingTitle: 'Today / Pending Admin Actions',
-      pendingItems: [
-        {
-          title: 'Branch activity review',
-          description: 'Check batch and attendance progress across assigned branches.',
-          badge: 'Branches',
-        },
-        {
-          title: 'Pending branch controller actions',
-          description: 'Branch admins need approval for new academic setup changes.',
-          badge: 'Users',
-        },
-        {
-          title: 'Final QA waiting list',
-          description: 'Submissions are pending final QA validation.',
-          badge: 'QA',
-        },
-      ],
-      quickActions: [
-        { label: 'Create Role', href: '/role-management', moduleId: 'roles', icon: 'workstream.svg' },
-        { label: 'Add Branch', href: '/branches', moduleId: 'branches', icon: 'patch.svg' },
-        { label: 'Add Branch Controller', href: '/users', moduleId: 'users', icon: 'users.svg' },
-        { label: 'View Reports', href: '/reports', moduleId: 'reports', icon: 'analytics.svg' },
-        { label: 'Manage Permissions', href: '/role-management', moduleId: 'roles', icon: 'reviews.svg' },
-      ],
-      chartTitle: 'Company Admin Overview',
-      chartData: [
-        { label: 'Branches', value: 5 },
-        { label: 'Students', value: branchStudents.length },
-        { label: 'Online Batches', value: getBranchBatchCount('online') || 0 },
-        { label: 'Offline Batches', value: getBranchBatchCount('offline') || 0 },
-        { label: 'Placements', value: 6 },
-      ],
-    },
-
-    branch_controller: {
-      title: `Welcome, ${user?.fullName || 'Branch Controller'}`,
-      subtitle:
-        'Branch Controller manages only assigned branch data, including students, mentors, batches, classes, attendance, tasks, and complaints.',
-      badge: 'Branch Controller / Branch Admin',
-      cards: [
-        {
-          label: 'Branch Students',
-          value: branchStudents.length,
-          helper: 'Students in assigned branch',
-          icon: 'students.svg',
-          moduleId: 'students',
-        },
-        {
-          label: 'Branch Mentors',
-          value: 8,
-          helper: 'Mentors assigned to branch',
-          icon: 'mentors.svg',
-          moduleId: 'mentors',
-        },
-        {
-          label: 'Active Online Batches',
-          value: getBranchBatchCount('online') || 0,
-          helper: 'Online classes and Zoom sessions',
-          icon: 'workstream.svg',
-          moduleId: 'batches',
-        },
-        {
-          label: 'Active Offline Batches',
-          value: getBranchBatchCount('offline') || 0,
-          helper: 'Offline classroom batches',
-          icon: 'patch.svg',
-          moduleId: 'batches',
-        },
-        {
-          label: 'Today’s Classes',
-          value: 7,
-          helper: 'Scheduled sessions today',
-          icon: 'courses.svg',
-          moduleId: 'batches',
-        },
-        {
-          label: 'Attendance Summary',
-          value: '86%',
-          helper: 'Average branch attendance',
-          icon: 'attendance.svg',
-          moduleId: 'attendance',
-        },
-        {
-          label: 'Pending Submissions',
-          value: branchSubmissions.length,
-          helper: 'Waiting for review',
-          icon: 'submissions.svg',
-          moduleId: 'submissions',
-        },
-        {
-          label: 'Placement Progress',
-          value: '62%',
-          helper: 'Eligible to placed progress',
-          icon: 'career.svg',
-          moduleId: 'placement',
-        },
-      ],
-      pendingTitle: 'Today / Pending Branch Actions',
-      pendingItems: [
-        {
-          title: 'Attendance not marked',
-          description: 'Offline batch attendance must be marked by mentors.',
-          badge: 'Attendance',
-        },
-        {
-          title: 'Tasks pending review',
-          description: 'Student submissions are waiting for mentor review.',
-          badge: 'Tasks',
-        },
-        {
-          title: 'Students needing attention',
-          description: 'Some students have low attendance or delayed submissions.',
-          badge: 'Students',
-        },
-      ],
-      quickActions: [
-        { label: 'Add Student', href: '/students', moduleId: 'students', icon: 'students.svg' },
-        { label: 'Add Mentor', href: '/mentors', moduleId: 'mentors', icon: 'mentors.svg' },
-        { label: 'Create Batch', href: '/batches', moduleId: 'batches', icon: 'patch.svg' },
-        { label: 'Create Class Session', href: '/batches', moduleId: 'batches', icon: 'courses.svg' },
-        { label: 'Assign Task', href: '/tasks', moduleId: 'tasks', icon: 'tasks.svg' },
-        { label: 'View Attendance', href: '/attendance', moduleId: 'attendance', icon: 'attendance.svg' },
-      ],
-      chartTitle: 'Branch Performance',
-      chartData: [
-        { label: 'Attendance', value: 86 },
-        { label: 'Task Completion', value: 72 },
-        { label: 'Placement Ready', value: 62 },
-        { label: 'Mentor Reviews', value: 54 },
-      ],
-    },
-
-    hod: {
-      title: `Welcome, ${user?.fullName || 'HOD'}`,
-      subtitle:
-        'HOD  dashboard is focused on mentor monitoring, submission review, marks approval, and student performance issues.',
-      badge: 'HOD ',
-      cards: [
-        {
-          label: 'Assigned Mentors',
-          value: 6,
-          helper: 'Mentors monitored by HOD',
-          icon: 'mentors.svg',
-          moduleId: 'mentors',
-        },
-        {
-          label: 'Pending HOD Reviews',
-          value: branchSubmissions.length,
-          helper: 'Submissions waiting for HOD review',
-          icon: 'reviews.svg',
-          moduleId: 'hod_review',
-        },
-        {
-          label: 'Mentor Performance',
-          value: '88%',
-          helper: 'Average mentor review quality',
-          icon: 'analytics.svg',
-          moduleId: 'reports',
-        },
-        {
-          label: 'Student Performance Issues',
-          value: 5,
-          helper: 'Low score or repeated delay cases',
-          icon: 'students.svg',
-          moduleId: 'students',
-        },
-        {
-          label: 'Tasks Waiting Approval',
-          value: 9,
-          helper: 'Tasks and marks awaiting review',
-          icon: 'tasks.svg',
-          moduleId: 'tasks',
-        },
-        {
-          label: 'Revision Requests',
-          value: 4,
-          helper: 'Returned submissions',
-          icon: 'submissions.svg',
-          moduleId: 'submissions',
-        },
-      ],
-      pendingTitle: 'Today / Pending HOD Reviews',
-      pendingItems: [
-        {
-          title: 'Submissions waiting for HOD review',
-          description: 'Review mentor scores and approve or request revision.',
-          badge: 'Review',
-        },
-        {
-          title: 'Mentors with delayed reviews',
-          description: 'Some mentors have pending student evaluation work.',
-          badge: 'Mentor',
-        },
-        {
-          title: 'Low-performing students',
-          description: 'Students need attention based on marks and task status.',
-          badge: 'Student',
-        },
-      ],
-      quickActions: [
-        { label: 'Review Submission', href: '/hod-review', moduleId: 'hod_review', icon: 'reviews.svg' },
-        { label: 'Approve Marks', href: '/marks-evaluation', moduleId: 'marks', icon: 'reviews.svg' },
-        { label: 'Request Revision', href: '/task-submissions', moduleId: 'submissions', icon: 'submissions.svg' },
-        { label: 'View Mentor Report', href: '/reports', moduleId: 'reports', icon: 'analytics.svg' },
-      ],
-      chartTitle: 'HOD Monitoring Overview',
-      chartData: [
-        { label: 'Mentor Reviews', value: 76 },
-        { label: 'Approved Marks', value: 58 },
-        { label: 'Revision Requests', value: 22 },
-        { label: 'Student Issues', value: 18 },
-      ],
-    },
-
-    mentor: {
-      title: `Welcome, ${user?.fullName || 'Mentor'}`,
-      subtitle:
-        'Mentor dashboard shows only assigned online and offline batches, today’s classes, task review, notes/video uploads, and attendance work.',
-      badge: 'Mentor / mentor',
-      cards: [
-        {
-          label: 'Today’s Classes',
-          value: 3,
-          helper: 'Online and offline sessions today',
-          icon: 'courses.svg',
-          moduleId: 'batches',
-        },
-        {
-          label: 'Assigned Batches',
-          value: 4,
-          helper: 'Online and offline batches assigned',
-          icon: 'patch.svg',
-          moduleId: 'batches',
-        },
-        {
-          label: 'Students Count',
-          value: branchStudents.length,
-          helper: 'Students in assigned batches',
-          icon: 'students.svg',
-          moduleId: 'students',
-        },
-        {
-          label: 'Tasks Created',
-          value: tasks.length,
-          helper: 'Created assignments and projects',
-          icon: 'tasks.svg',
-          moduleId: 'tasks',
-        },
-        {
-          label: 'Pending Reviews',
-          value: branchSubmissions.length,
-          helper: 'Submissions waiting for mentor review',
-          icon: 'submissions.svg',
-          moduleId: 'submissions',
-        },
-        {
-          label: 'Attendance Pending',
-          value: 2,
-          helper: 'Offline classes need manual attendance',
-          icon: 'attendance.svg',
-          moduleId: 'attendance',
-        },
-        {
-          label: 'Average Performance',
-          value: '81%',
-          helper: 'Average student progress',
-          icon: 'analytics.svg',
-          moduleId: 'reports',
-        },
-      ],
-      pendingTitle: 'Today / Pending Mentor Actions',
-      pendingItems: [
-        {
-          title: 'Offline attendance pending',
-          description: 'Manual attendance is required for offline batches only.',
-          badge: 'Offline',
-        },
-        {
-          title: 'Submissions waiting for review',
-          description: 'Student submissions need mentor marks and feedback.',
-          badge: 'Review',
-        },
-        {
-          title: 'Upload notes or video',
-          description: 'Class materials can be uploaded after the session.',
-          badge: 'Upload',
-        },
-      ],
-      quickActions: [
-        { label: 'Mark Attendance', href: '/attendance', moduleId: 'attendance', icon: 'attendance.svg' },
-        { label: 'Create Task', href: '/tasks', moduleId: 'tasks', icon: 'tasks.svg' },
-        { label: 'Upload Notes or Videos', href: '/batches', moduleId: 'batches', icon: 'courses.svg' },
-        { label: 'Review Submission', href: '/task-submissions', moduleId: 'submissions', icon: 'submissions.svg' },
-        { label: 'Upload Marks', href: '/marks-evaluation', moduleId: 'marks', icon: 'reviews.svg' },
-      ],
-      chartTitle: 'Mentor Batch Performance',
-      chartData: [
-        { label: 'Attendance', value: 84 },
-        { label: 'Submissions', value: 71 },
-        { label: 'Marks Uploaded', value: 63 },
-        { label: 'Class Materials', value: 92 },
-      ],
-    },
-
-    final_qa: {
-      title: `Welcome, ${user?.fullName || 'Final QA'}`,
-      subtitle:
-        'Final QA dashboard focuses on final validation, all-stage marks visibility, score locking, rejected cases, and certificate readiness.',
-      badge: 'Final QA',
-      cards: [
-        {
-          label: 'Waiting Validation',
-          value: branchSubmissions.length,
-          helper: 'Submissions waiting final QA',
-          icon: 'reviews.svg',
-          moduleId: 'final_qa',
-        },
-        {
-          label: 'QA Approved',
-          value: 18,
-          helper: 'Validated submissions',
-          icon: 'submissions.svg',
-          moduleId: 'final_qa',
-        },
-        {
-          label: 'Rejected / Revision',
-          value: 4,
-          helper: 'Rejected or revision requested',
-          icon: 'reviews.svg',
-          moduleId: 'final_qa',
-        },
-        {
-          label: 'Scores Locked',
-          value: 15,
-          helper: 'Final scores locked',
-          icon: 'portfolio.svg',
-          moduleId: 'final_qa',
-        },
-        {
-          label: 'Ready for Certificate',
-          value: 11,
-          helper: 'Students eligible for certificate',
-          icon: 'portfolio.svg',
-          moduleId: 'certificates',
-        },
-      ],
-      pendingTitle: 'Today / Pending Final QA Actions',
-      pendingItems: [
-        {
-          title: 'Pending final validation',
-          description: 'Review mentor and HOD marks before final score lock.',
-          badge: 'Validate',
-        },
-        {
-          title: 'Scores waiting to be locked',
-          description: 'Approved evaluations can be locked by Final QA.',
-          badge: 'Lock',
-        },
-        {
-          title: 'Certificate-ready students',
-          description: 'Validated students can move to certificate upload.',
-          badge: 'Certificate',
-        },
-      ],
-      quickActions: [
-        { label: 'Validate Submission', href: '/final-qa', moduleId: 'final_qa', icon: 'reviews.svg' },
-        { label: 'Lock Final Score', href: '/final-qa', moduleId: 'final_qa', icon: 'portfolio.svg' },
-        { label: 'View Evaluation History', href: '/marks-evaluation', moduleId: 'marks', icon: 'analytics.svg' },
-        { label: 'View All Stage Marks', href: '/marks-evaluation', moduleId: 'marks', icon: 'submissions.svg' },
-      ],
-      chartTitle: 'Final QA Status',
-      chartData: [
-        { label: 'Waiting', value: branchSubmissions.length },
-        { label: 'Approved', value: 18 },
-        { label: 'Revision', value: 4 },
-        { label: 'Locked', value: 15 },
-      ],
-    },
-
-    student: {
-      title: `Welcome, ${user?.fullName || 'Student'}`,
-      subtitle:
-        'Student dashboard shows only personal learning data, attendance, pending tasks, submissions, marks, certificate, placement, and complaints.',
-      badge: 'Student',
-      cards: [
-        {
-          label: 'Attendance Percentage',
-          value: '89%',
-          helper: 'Current attendance status',
-          icon: 'attendance.svg',
-          moduleId: 'attendance',
-        },
-        {
-          label: 'Pending Tasks',
-          value: 3,
-          helper: 'Tasks waiting for submission',
-          icon: 'tasks.svg',
-          moduleId: 'tasks',
-        },
-        {
-          label: 'Submitted Tasks',
-          value: 8,
-          helper: 'Submitted assignments',
-          icon: 'submissions.svg',
-          moduleId: 'submissions',
-        },
-        {
-          label: 'Marks / Feedback',
-          value: '82%',
-          helper: 'Average score and mentor feedback',
-          icon: 'reviews.svg',
-          moduleId: 'marks',
-        },
-        {
-          label: 'Certificate Status',
-          value: 'Pending',
-          helper: 'Certificate will unlock after completion',
-          icon: 'portfolio.svg',
-          moduleId: 'certificates',
-        },
-        {
-          label: 'Placement Status',
-          value: 'Eligible',
-          helper: 'Placement progress status',
-          icon: 'career.svg',
-          moduleId: 'placement',
-        },
-        {
-          label: 'Complaint Status',
-          value: '1 Open',
-          helper: 'Support request tracking',
-          icon: 'admission.svg',
-          moduleId: 'complaints',
-        },
-      ],
-      pendingTitle: 'Today / Pending Student Actions',
-      pendingItems: [
-        {
-          title: 'Upcoming class',
-          description: 'Next scheduled session is visible from your batch timeline.',
-          badge: 'Class',
-        },
-        {
-          title: 'Pending submission',
-          description: 'One task is nearing due date.',
-          badge: 'Task',
-        },
-        {
-          title: 'Latest mentor feedback',
-          description: 'Review comments are available for your recent submission.',
-          badge: 'Feedback',
-        },
-      ],
-      quickActions: [
-        { label: 'Submit Task', href: '/task-submissions', moduleId: 'submissions', icon: 'submissions.svg' },
-        { label: 'View Attendance', href: '/attendance', moduleId: 'attendance', icon: 'attendance.svg' },
-        { label: 'Download Certificate', href: '/certificates', moduleId: 'certificates', icon: 'portfolio.svg' },
-        { label: 'Raise Complaint', href: '/complaints', moduleId: 'complaints', icon: 'admission.svg' },
-        { label: 'View Feedback', href: '/marks-evaluation', moduleId: 'marks', icon: 'reviews.svg' },
-      ],
-      chartTitle: 'My Learning Progress',
-      chartData: [
-        { label: 'Attendance', value: 89 },
-        { label: 'Tasks Submitted', value: 74 },
-        { label: 'Average Marks', value: 82 },
-        { label: 'Course Progress', value: 68 },
-      ],
-    },
-
-    placement: {
-      title: `Welcome, ${user?.fullName || 'Placement Cell'}`,
-      subtitle:
-        'Placement Cell dashboard tracks eligible students, resume status, interview progress, company details, and placement reports.',
-      badge: 'Placement Cell',
-      cards: [
-        {
-          label: 'Eligible Students',
-          value: 24,
-          helper: 'Students ready for placement process',
-          icon: 'students.svg',
-          moduleId: 'placement',
-        },
-        {
-          label: 'Resume Submitted',
-          value: 19,
-          helper: 'Students submitted resumes',
-          icon: 'submissions.svg',
-          moduleId: 'placement',
-        },
-        {
-          label: 'Resume Approved',
-          value: 15,
-          helper: 'Approved for company sharing',
-          icon: 'reviews.svg',
-          moduleId: 'placement',
-        },
-        {
-          label: 'Interviews Scheduled',
-          value: 8,
-          helper: 'Upcoming interview rounds',
-          icon: 'attendance.svg',
-          moduleId: 'placement',
-        },
-        {
-          label: 'Students Selected',
-          value: 5,
-          helper: 'Selected candidates',
-          icon: 'career.svg',
-          moduleId: 'placement',
-        },
-        {
-          label: 'Students Placed',
-          value: 4,
-          helper: 'Confirmed placement',
-          icon: 'career.svg',
-          moduleId: 'placement',
-        },
-      ],
-      pendingTitle: 'Today / Pending Placement Actions',
-      pendingItems: [
-        {
-          title: 'Resume review pending',
-          description: 'Review students who submitted updated resumes.',
-          badge: 'Resume',
-        },
-        {
-          title: 'Upcoming interviews',
-          description: 'Follow up with students and companies.',
-          badge: 'Interview',
-        },
-        {
-          title: 'Students ready for company sharing',
-          description: 'Eligible students can be shared with hiring partners.',
-          badge: 'Eligible',
-        },
-      ],
-      quickActions: [
-        { label: 'Update Placement Status', href: '/placement', moduleId: 'placement', icon: 'career.svg' },
-        { label: 'Review Resume', href: '/placement', moduleId: 'placement', icon: 'submissions.svg' },
-        { label: 'Schedule Interview', href: '/placement', moduleId: 'placement', icon: 'attendance.svg' },
-        { label: 'Add Company Details', href: '/placement', moduleId: 'placement', icon: 'workstream.svg' },
-        { label: 'Export Placement Report', href: '/reports', moduleId: 'reports', icon: 'analytics.svg' },
-      ],
-      chartTitle: 'Placement Funnel',
-      chartData: [
-        { label: 'Eligible', value: 24 },
-        { label: 'Resume Approved', value: 15 },
-        { label: 'Interviews', value: 8 },
-        { label: 'Selected', value: 5 },
-        { label: 'Placed', value: 4 },
-      ],
-    },
-  }
-
-  const data = dashboardData[roleKey]
 
   const visibleCards = data.cards.filter((card) => !card.moduleId || canModule(card.moduleId))
   const visibleActions = data.quickActions.filter((action) => canModule(action.moduleId))
+  const visibleModules = demoModules.filter((module) => canModule(module.id))
 
   return (
     <div className="space-y-6">
@@ -885,6 +214,9 @@ export default function DashboardPage() {
             <p className="text-sm font-semibold text-[#153e90] dark:text-[#6ee75a]">{data.badge}</p>
             <h1 className="mt-2 text-3xl font-bold tracking-tight">{data.title}</h1>
             <p className="mt-2 max-w-4xl text-muted-foreground">{data.subtitle}</p>
+            {statsLoading && (
+              <p className="mt-3 text-sm text-muted-foreground">Loading live dashboard counts…</p>
+            )}
           </div>
         </div>
       </div>
@@ -898,7 +230,7 @@ export default function DashboardPage() {
       <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
         <div className="space-y-5">
           <div className="border border-border bg-card p-5">
-            <SectionHeader title={data.pendingTitle} subtitle="Important actions and updates that need attention." />
+            <SectionHeader title={data.pendingTitle} subtitle="Live items generated from your database counts." />
 
             <div className="mt-5 space-y-3">
               {data.pendingItems.map((item) => (
@@ -933,22 +265,35 @@ export default function DashboardPage() {
                   >
                     <div className="flex items-center gap-3">
                       <span className="flex h-9 w-9 items-center justify-center bg-[#153e90]/10 dark:bg-[#6ee75a]/10">
-                        <CustomIcon icon={action.icon} folder={iconFolder} alt={action.label} className="h-4 w-4" />
+                        <CustomIcon icon={action.icon} folder={iconFolder} alt={action.label} />
                       </span>
-
                       <span className="font-semibold">{action.label}</span>
                     </div>
 
-                    <span className="text-xl leading-none text-[#153e90] transition group-hover:translate-x-1 dark:text-[#6ee75a]">
-                      ›
-                    </span>
+                    <span className="text-sm text-muted-foreground transition group-hover:text-foreground">Open</span>
                   </Link>
                 ))
               ) : (
                 <div className="border border-border bg-background p-4 text-sm text-muted-foreground">
-                  No quick actions are enabled for this role.
+                  No quick actions available for your current permissions.
                 </div>
               )}
+            </div>
+          </div>
+
+          <div className="border border-border bg-card p-5">
+            <SectionHeader title="Visible Modules" subtitle="Navigation modules enabled for your role." />
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              {visibleModules.map((module) => (
+                <Link
+                  key={module.id}
+                  href={module.href}
+                  className="border border-border bg-background px-3 py-2 text-xs font-semibold hover:bg-accent"
+                >
+                  {module.label}
+                </Link>
+              ))}
             </div>
           </div>
         </div>

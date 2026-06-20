@@ -5,6 +5,7 @@ import {
   canCreateProfileUnderParent,
   canManagePermissionProfile,
   isElevatedPermissionProfile,
+  isImmutableSuperAdminProfile,
 } from '@/lib/auth/role-management-access'
 import { createClient } from '@/lib/supabase/client'
 
@@ -91,6 +92,7 @@ const moduleLabels: Record<string, string> = {
   placement: 'Placement',
   certificates: 'Certificates',
   complaints: 'Complaints',
+  ratings: 'Mentor Ratings',
   reports: 'Reports',
   settings: 'Settings',
 }
@@ -379,7 +381,12 @@ export async function fetchParentRoles(
   }
 }
 
-export { isElevatedPermissionProfile, canManagePermissionProfile, canCreateProfileUnderParent }
+export {
+  isElevatedPermissionProfile,
+  canManagePermissionProfile,
+  canCreateProfileUnderParent,
+  isImmutableSuperAdminProfile,
+} from '@/lib/auth/role-management-access'
 
 export function groupProfilesByParentRole(
   profiles: PermissionProfileItem[],
@@ -405,9 +412,16 @@ export async function savePermissionProfile(
   const actorParentRoleId = await resolveActorParentRoleId(client, options?.actorParentRoleId)
 
   if (!canCreateProfileUnderParent(actorParentRoleId, input.parent_role_id)) {
+    if (input.parent_role_id === 'super_admin') {
+      return {
+        ok: false,
+        error: 'Super Admin parent role cannot be assigned to permission profiles from the UI.',
+      }
+    }
+
     return {
       ok: false,
-      error: 'Only Super Admin can manage Company Admin and Super Admin permission profiles.',
+      error: 'Only Super Admin can manage Company Admin permission profiles.',
     }
   }
 
@@ -423,10 +437,24 @@ export async function savePermissionProfile(
         return { ok: false, error: readError?.message || 'Permission profile not found.' }
       }
 
+      if (isImmutableSuperAdminProfile(existingProfile)) {
+        return {
+          ok: false,
+          error: 'Super Admin permission profile is system-locked and cannot be edited.',
+        }
+      }
+
       if (!canManagePermissionProfile(actorParentRoleId, existingProfile)) {
         return {
           ok: false,
-          error: 'Only Super Admin can edit Super Admin and Company Admin profiles.',
+          error: 'Only Super Admin can edit Company Admin profiles.',
+        }
+      }
+
+      if (input.parent_role_id === 'super_admin') {
+        return {
+          ok: false,
+          error: 'Super Admin parent role cannot be assigned to permission profiles from the UI.',
         }
       }
 
@@ -541,10 +569,17 @@ export async function deletePermissionProfile(
     return { ok: false, error: readError?.message || 'Permission profile not found.' }
   }
 
+  if (isImmutableSuperAdminProfile(profile)) {
+    return {
+      ok: false,
+      error: 'Super Admin permission profile cannot be deleted.',
+    }
+  }
+
   if (!canManagePermissionProfile(actorParentRoleId, profile)) {
     return {
       ok: false,
-      error: 'Only Super Admin can delete Super Admin and Company Admin profiles.',
+      error: 'Only Super Admin can delete Company Admin profiles.',
     }
   }
 
@@ -580,10 +615,14 @@ export async function assignUserPermissionProfile(
     return { ok: false, error: profileError?.message || 'Permission profile not found.' }
   }
 
+  if (isImmutableSuperAdminProfile(profile)) {
+    return { ok: false, error: 'Super Admin profile cannot be assigned from the UI.' }
+  }
+
   if (!canManagePermissionProfile(actorParentRoleId, profile)) {
     return {
       ok: false,
-      error: 'Only Super Admin can assign Super Admin and Company Admin profiles.',
+      error: 'Only Super Admin can assign Company Admin profiles.',
     }
   }
 
