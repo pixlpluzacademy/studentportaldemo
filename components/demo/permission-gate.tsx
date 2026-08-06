@@ -7,10 +7,21 @@ import { getModuleByHref, useAuth } from '@/lib/auth/provider'
 
 export function PermissionGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const { user, canModule, sessionState } = useAuth()
+  const { user, canModule, sessionState, parentRoleId } = useAuth()
   const module = getModuleByHref(pathname)
 
-  if (pathname === '/login' || pathname === '/') return <>{children}</>
+  const isPublicAuthPage =
+    pathname === '/' ||
+    pathname === '/login' ||
+    pathname === '/forgot-password' ||
+    pathname === '/forgot_password' ||
+    pathname === '/reset-password'
+
+  const isStudentPlacementJobs =
+    parentRoleId === 'student' &&
+    (pathname === '/placement/my-jobs' || pathname.startsWith('/placement/my-jobs/'))
+
+  if (isPublicAuthPage) return <>{children}</>
 
   if (sessionState === 'loading') {
     return (
@@ -33,7 +44,7 @@ export function PermissionGate({ children }: { children: React.ReactNode }) {
     )
   }
 
-  if (module && !canModule(module.id)) {
+  if (module && !canModule(module.id) && !isStudentPlacementJobs) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
         <div className="max-w-lg border border-red-500/20 bg-card p-8 text-center">

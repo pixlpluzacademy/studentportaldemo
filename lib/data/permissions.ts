@@ -90,6 +90,7 @@ const moduleLabels: Record<string, string> = {
   hod_review: 'HOD Review',
   final_qa: 'Final QA',
   placement: 'Placement',
+  admissions: 'Admissions / Leads',
   certificates: 'Certificates',
   complaints: 'Complaints',
   ratings: 'Mentor Ratings',
@@ -105,7 +106,8 @@ export function groupCatalogByModule(catalog: PermissionCatalogItem[]): Permissi
   const grouped = new Map<string, PermissionCatalogItem[]>()
 
   for (const item of catalog) {
-    if (item.module_id === 'companies') continue
+    // Hidden for now — data layer kept; re-enable when Admissions UI ships.
+    if (item.module_id === 'companies' || item.module_id === 'admissions') continue
     const list = grouped.get(item.module_id) || []
     list.push(item)
     grouped.set(item.module_id, list)

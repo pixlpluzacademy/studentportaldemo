@@ -14,7 +14,6 @@ import {
   type SummaryCard,
 } from '@/lib/data/dashboard'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
-import { demoModules } from '@/lib/demo/seed'
 import { cn } from '@/lib/utils'
 
 function CustomIcon({
@@ -204,7 +203,6 @@ export default function DashboardPage() {
 
   const visibleCards = data.cards.filter((card) => !card.moduleId || canModule(card.moduleId))
   const visibleActions = data.quickActions.filter((action) => canModule(action.moduleId))
-  const visibleModules = demoModules.filter((module) => canModule(module.id))
 
   return (
     <div className="space-y-6">
@@ -278,22 +276,6 @@ export default function DashboardPage() {
                   No quick actions available for your current permissions.
                 </div>
               )}
-            </div>
-          </div>
-
-          <div className="border border-border bg-card p-5">
-            <SectionHeader title="Visible Modules" subtitle="Navigation modules enabled for your role." />
-
-            <div className="mt-5 flex flex-wrap gap-2">
-              {visibleModules.map((module) => (
-                <Link
-                  key={module.id}
-                  href={module.href}
-                  className="border border-border bg-background px-3 py-2 text-xs font-semibold hover:bg-accent"
-                >
-                  {module.label}
-                </Link>
-              ))}
             </div>
           </div>
         </div>

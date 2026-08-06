@@ -16,31 +16,27 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { User, Bell, Shield, Palette } from 'lucide-react'
+import { User, Shield, Palette } from 'lucide-react'
 import { useDemoAuth } from '@/lib/demo/auth'
 import { fetchMyMentorRatingSummary, type MentorRatingSummary } from '@/lib/data/mentor-ratings'
+import { updateMyPassword, updateMyProfile } from '@/lib/data/settings'
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme()
-  const { user, role, parentRoleId, can } = useDemoAuth()
+  const { user, role, parentRoleId, can, refreshSession } = useDemoAuth()
 
   const [ratingSummary, setRatingSummary] = useState<MentorRatingSummary | null>(null)
   const [ratingLoading, setRatingLoading] = useState(false)
 
   const isMentorProfile = parentRoleId === 'mentor' && can('ratings.view')
 
-  const [fullName, setFullName] = useState(user?.fullName || 'Demo User')
-  const [email, setEmail] = useState(user?.email || 'demo@getskill.local')
+  const [fullName, setFullName] = useState(user?.fullName || '')
+  const [email, setEmail] = useState(user?.email || '')
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar || '')
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
 
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-
-  const [taskAssignments, setTaskAssignments] = useState(true)
-  const [submissionReviews, setSubmissionReviews] = useState(true)
-  const [projectUpdates, setProjectUpdates] = useState(true)
-  const [weeklyDigest, setWeeklyDigest] = useState(false)
 
   const [compactView, setCompactView] = useState(false)
   const [animations, setAnimations] = useState(true)
@@ -57,6 +53,12 @@ export default function SettingsPage() {
       .join('')
       .slice(0, 2)
       .toUpperCase() || 'U'
+
+  useEffect(() => {
+    setFullName(user?.fullName || '')
+    setEmail(user?.email || '')
+    setAvatarUrl(user?.avatar || '')
+  }, [user?.avatar, user?.email, user?.fullName])
 
   useEffect(() => {
     if (!isMentorProfile) {
@@ -94,11 +96,30 @@ export default function SettingsPage() {
       return
     }
 
-    setTimeout(() => {
-      setAvatarFile(null)
-      setMessage('Profile updated successfully in demo.')
+    const result = await updateMyProfile({
+      fullName,
+      email,
+      avatarFile,
+    })
+
+    if (!result.ok) {
+      setError(result.error)
       setSavingProfile(false)
-    }, 500)
+      return
+    }
+
+    if (result.avatarUrl) {
+      setAvatarUrl(result.avatarUrl)
+    }
+
+    setAvatarFile(null)
+    await refreshSession()
+    setMessage(
+      email.trim().toLowerCase() !== (user?.email || '').toLowerCase()
+        ? 'Profile updated. If email changed, check your inbox to confirm the new email.'
+        : 'Profile updated successfully.',
+    )
+    setSavingProfile(false)
   }
 
   const handleUpdatePassword = async () => {
@@ -106,30 +127,21 @@ export default function SettingsPage() {
     setMessage('')
     setError('')
 
-    if (!newPassword || !confirmPassword) {
-      setError('Please enter and confirm your new password.')
+    const result = await updateMyPassword({
+      newPassword,
+      confirmPassword,
+    })
+
+    if (!result.ok) {
+      setError(result.error)
       setSavingPassword(false)
       return
     }
 
-    if (newPassword !== confirmPassword) {
-      setError('New password and confirm password do not match.')
-      setSavingPassword(false)
-      return
-    }
-
-    if (newPassword.length < 6) {
-      setError('Password should be at least 6 characters.')
-      setSavingPassword(false)
-      return
-    }
-
-    setTimeout(() => {
-      setNewPassword('')
-      setConfirmPassword('')
-      setMessage('Password updated successfully in demo.')
-      setSavingPassword(false)
-    }, 500)
+    setNewPassword('')
+    setConfirmPassword('')
+    setMessage('Password updated successfully.')
+    setSavingPassword(false)
   }
 
   return (
@@ -158,11 +170,6 @@ export default function SettingsPage() {
           <TabsTrigger value="profile">
             <User className="mr-2 h-4 w-4" />
             Profile
-          </TabsTrigger>
-
-          <TabsTrigger value="notifications">
-            <Bell className="mr-2 h-4 w-4" />
-            Notifications
           </TabsTrigger>
 
           <TabsTrigger value="security">
@@ -210,7 +217,7 @@ export default function SettingsPage() {
                   />
 
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Upload JPG, PNG, or WEBP profile image. Demo preview only.
+                    Upload JPG, PNG, or WEBP profile image. Saved to your account.
                   </p>
                 </div>
               </div>
@@ -249,10 +256,12 @@ export default function SettingsPage() {
                 <Button
                   variant="outline"
                   onClick={() => {
-                    setFullName(user?.fullName || 'Demo User')
-                    setEmail(user?.email || 'demo@getskill.local')
+                    setFullName(user?.fullName || '')
+                    setEmail(user?.email || '')
                     setAvatarUrl(user?.avatar || '')
                     setAvatarFile(null)
+                    setError('')
+                    setMessage('')
                   }}
                 >
                   Cancel
@@ -306,77 +315,6 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           )}
-        </TabsContent>
-
-        <TabsContent value="notifications" className="space-y-6">
-          <Card className="w-full border border-border bg-card">
-            <CardHeader>
-              <CardTitle>Email Notifications</CardTitle>
-              <CardDescription>
-                These options are UI-only until a preferences table is added.
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Task Assignments</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified when new tasks are assigned to you
-                  </p>
-                </div>
-                <Switch
-                  checked={taskAssignments}
-                  onCheckedChange={setTaskAssignments}
-                />
-              </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Submission Reviews</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified when your submissions are reviewed
-                  </p>
-                </div>
-                <Switch
-                  checked={submissionReviews}
-                  onCheckedChange={setSubmissionReviews}
-                />
-              </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Project Updates</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Get notified about project milestones and updates
-                  </p>
-                </div>
-                <Switch
-                  checked={projectUpdates}
-                  onCheckedChange={setProjectUpdates}
-                />
-              </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Weekly Digest</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Receive a weekly summary of your activity
-                  </p>
-                </div>
-                <Switch
-                  checked={weeklyDigest}
-                  onCheckedChange={setWeeklyDigest}
-                />
-              </div>
-            </CardContent>
-          </Card>
         </TabsContent>
 
         <TabsContent value="security" className="space-y-6">

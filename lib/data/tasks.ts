@@ -24,6 +24,16 @@ export type TaskListRow = {
   attachmentPath: string | null
   studentSubmitted: boolean
   studentSubmissionId: string | null
+  canResubmit: boolean
+  resubmitDeadlineDate: string | null
+  resubmitDeadlineTime: string | null
+  resubmitDeadlineDisplay: string
+  revisionFeedback: {
+    stage: 'Mentor' | 'HOD' | 'Final QA'
+    decision: string
+    comment: string
+    mark: string
+  } | null
 }
 
 export type TaskBatchLookup = {
@@ -137,10 +147,25 @@ function mapFrequencyLabel(frequency: DbTaskFrequency): TaskFrequency {
 }
 
 export function mapFrequencyToDb(frequency: string): DbTaskFrequency {
-  const value = frequency.toLowerCase()
+  const value = frequency.toLowerCase().replace(/[\s-]+/g, '_')
   if (value === 'daily') return 'daily'
   if (value === 'weekly') return 'weekly'
+  // UI label "Final Project" still maps to DB one_time
   return 'one_time'
+}
+
+export function getAssignmentTypeLabel(frequency: string | null | undefined) {
+  const value = String(frequency || '').toLowerCase()
+  if (value === 'daily') return 'Daily Assignment'
+  if (value === 'weekly') return 'Weekly Assignment'
+  return 'Final Project'
+}
+
+export function getAssignmentMaxMarks(frequency: string | null | undefined) {
+  const value = String(frequency || '').toLowerCase()
+  if (value === 'daily') return 50
+  if (value === 'weekly') return 75
+  return 100
 }
 
 function mapDbTaskRow(
@@ -151,6 +176,9 @@ function mapDbTaskRow(
     studentSubmissionTaskIds?: Set<string>
     studentSubmissionIds?: Map<string, string>
     studentId?: string | null
+    canResubmitByTaskId?: Map<string, boolean>
+    resubmitDeadlineByTaskId?: Map<string, { date: string | null; time: string | null }>
+    revisionFeedbackByTaskId?: Map<string, TaskListRow['revisionFeedback']>
   },
 ): TaskListRow {
   const assigner = unwrap(row.assigner)
@@ -160,6 +188,15 @@ function mapDbTaskRow(
   const enrolled = batchMeta?.enrolledCount || 0
   const submittedCount = options?.submissionCounts?.get(row.id) || 0
   const studentSubmitted = options?.studentSubmissionTaskIds?.has(row.id) || false
+  const canResubmit = options?.canResubmitByTaskId?.get(row.id) || false
+  const resubmitDeadline = options?.resubmitDeadlineByTaskId?.get(row.id)
+  const resubmitDeadlineDate = resubmitDeadline?.date || null
+  const resubmitDeadlineTime = resubmitDeadline?.time || null
+  const resubmitDeadlineDisplay = resubmitDeadlineDate
+    ? resubmitDeadlineTime
+      ? `${resubmitDeadlineDate} · ${resubmitDeadlineTime}`
+      : resubmitDeadlineDate
+    : '-'
 
   return {
     id: row.id,
@@ -174,9 +211,11 @@ function mapDbTaskRow(
     dueTime: normalizeDueTimeValue(row.due_time),
     dueDisplay: formatTaskDueDisplay(row.due_date, row.due_time),
     submissions: options?.studentId
-      ? studentSubmitted
-        ? 'Submitted'
-        : 'Pending'
+      ? canResubmit
+        ? 'Revision Requested'
+        : studentSubmitted
+          ? 'Submitted'
+          : 'Pending'
       : `${submittedCount}/${Math.max(enrolled, 0)}`,
     status: mapTaskStatusLabel(row.status, row.due_date, row.due_time),
     fileRequirement:
@@ -186,7 +225,72 @@ function mapDbTaskRow(
     attachmentPath: row.attachment_path,
     studentSubmitted,
     studentSubmissionId: options?.studentSubmissionIds?.get(row.id) || null,
+    canResubmit,
+    resubmitDeadlineDate,
+    resubmitDeadlineTime,
+    resubmitDeadlineDisplay,
+    revisionFeedback: options?.revisionFeedbackByTaskId?.get(row.id) || null,
   }
+}
+
+function mapDecisionLabel(decision: string | null | undefined) {
+  if (decision === 'approved') return 'Approved'
+  if (decision === 'rejected') return 'Rejected'
+  if (decision === 'revision_requested') return 'Revision Requested'
+  return 'Pending'
+}
+
+function pickRevisionFeedback(submission: {
+  mentor_decision?: string | null
+  mentor_comment?: string | null
+  mentor_mark?: number | null
+  hod_decision?: string | null
+  hod_comment?: string | null
+  hod_mark?: number | null
+  qa_decision?: string | null
+  qa_comment?: string | null
+  qa_mark?: number | null
+}): TaskListRow['revisionFeedback'] {
+  if (
+    submission.qa_decision === 'revision_requested' ||
+    submission.qa_decision === 'rejected'
+  ) {
+    return {
+      stage: 'Final QA',
+      decision: mapDecisionLabel(submission.qa_decision),
+      comment: submission.qa_comment?.trim() || '',
+      mark: submission.qa_mark === null || submission.qa_mark === undefined ? '-' : String(submission.qa_mark),
+    }
+  }
+
+  if (
+    submission.hod_decision === 'revision_requested' ||
+    submission.hod_decision === 'rejected'
+  ) {
+    return {
+      stage: 'HOD',
+      decision: mapDecisionLabel(submission.hod_decision),
+      comment: submission.hod_comment?.trim() || '',
+      mark: submission.hod_mark === null || submission.hod_mark === undefined ? '-' : String(submission.hod_mark),
+    }
+  }
+
+  if (
+    submission.mentor_decision === 'revision_requested' ||
+    submission.mentor_decision === 'rejected'
+  ) {
+    return {
+      stage: 'Mentor',
+      decision: mapDecisionLabel(submission.mentor_decision),
+      comment: submission.mentor_comment?.trim() || '',
+      mark:
+        submission.mentor_mark === null || submission.mentor_mark === undefined
+          ? '-'
+          : String(submission.mentor_mark),
+    }
+  }
+
+  return null
 }
 
 export function computeBatchTaskProgress(input: {
@@ -460,7 +564,25 @@ export async function fetchTaskById(
 
     let submissionsQuery = client
       .from('task_submissions')
-      .select('id, task_id, student_id, status')
+      .select(
+        `
+        id,
+        task_id,
+        student_id,
+        status,
+        mentor_decision,
+        mentor_comment,
+        mentor_mark,
+        hod_decision,
+        hod_comment,
+        hod_mark,
+        qa_decision,
+        qa_comment,
+        qa_mark,
+        resubmit_deadline_date,
+        resubmit_deadline_time
+      `,
+      )
       .eq('task_id', taskId)
       .in('status', submittedStatuses)
 
@@ -469,12 +591,47 @@ export async function fetchTaskById(
     }
 
     const { data: submissions } = await submissionsQuery
+    const canResubmitByTaskId = new Map<string, boolean>()
+    const resubmitDeadlineByTaskId = new Map<string, { date: string | null; time: string | null }>()
+    const revisionFeedbackByTaskId = new Map<string, TaskListRow['revisionFeedback']>()
 
     ;(submissions || []).forEach((submission) => {
       submissionCounts.set(submission.task_id, (submissionCounts.get(submission.task_id) || 0) + 1)
       if (options?.studentId && submission.student_id === options.studentId) {
         studentSubmissionTaskIds.add(submission.task_id)
         studentSubmissionIds.set(submission.task_id, submission.id)
+
+        const needsResubmit =
+          submission.status === 'revision' ||
+          submission.status === 'rejected' ||
+          submission.mentor_decision === 'revision_requested' ||
+          submission.mentor_decision === 'rejected' ||
+          submission.hod_decision === 'revision_requested' ||
+          submission.hod_decision === 'rejected' ||
+          submission.qa_decision === 'revision_requested' ||
+          submission.qa_decision === 'rejected'
+
+        const deadlineDate = submission.resubmit_deadline_date
+          ? String(submission.resubmit_deadline_date).slice(0, 10)
+          : null
+        const deadlineTime = submission.resubmit_deadline_time
+          ? String(submission.resubmit_deadline_time).slice(0, 5)
+          : null
+
+        let deadlineOpen = true
+        if (deadlineDate) {
+          const today = new Date().toISOString().slice(0, 10)
+          deadlineOpen = deadlineTime
+            ? new Date() <= new Date(`${deadlineDate}T${deadlineTime}:00`)
+            : today <= deadlineDate
+        }
+
+        canResubmitByTaskId.set(submission.task_id, needsResubmit && deadlineOpen)
+        resubmitDeadlineByTaskId.set(submission.task_id, {
+          date: deadlineDate,
+          time: deadlineTime,
+        })
+        revisionFeedbackByTaskId.set(submission.task_id, pickRevisionFeedback(submission))
       }
     })
 
@@ -486,6 +643,9 @@ export async function fetchTaskById(
         studentSubmissionTaskIds,
         studentSubmissionIds,
         studentId: options?.studentId,
+        canResubmitByTaskId,
+        resubmitDeadlineByTaskId,
+        revisionFeedbackByTaskId,
       }),
     }
   } catch (error) {

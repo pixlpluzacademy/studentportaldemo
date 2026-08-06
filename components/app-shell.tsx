@@ -22,7 +22,6 @@ import type { ModuleId } from '@/lib/demo/types'
 import { useDemoAuth } from '@/lib/demo/auth'
 import { PermissionGate } from '@/components/demo/permission-gate'
 import {
-  Bell,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -32,6 +31,7 @@ import {
   Sun,
   User,
 } from 'lucide-react'
+import { NotificationsBell } from '@/components/notifications-bell'
 
 type NavChild = {
   label: string
@@ -98,10 +98,33 @@ const navGroups: NavGroup[] = [
     ],
   },
 
-  { label: 'Placement', href: '/placement', moduleId: 'placement', icon: 'career.svg' },
+  {
+    label: 'Placement',
+    icon: 'career.svg',
+    children: [
+      {
+        label: 'Eligible Students',
+        href: '/placement/eligible',
+        moduleId: 'placement',
+        icon: 'students.svg',
+      },
+      {
+        label: 'Jobs',
+        href: '/placement/jobs',
+        moduleId: 'placement',
+        icon: 'career.svg',
+      },
+      {
+        label: 'Placed Students',
+        href: '/placement/placed-students',
+        moduleId: 'placement',
+        icon: 'students.svg',
+      },
+    ],
+  },
   { label: 'Certificates', href: '/certificates', moduleId: 'certificates', icon: 'portfolio.svg' },
-      { label: 'Complaints', href: '/complaints', moduleId: 'complaints', icon: 'admission.svg', lightIcon: 'admission.svg' },
-      { label: 'Reports', href: '/reports', moduleId: 'reports', icon: 'analytics.svg' },
+  { label: 'Complaints', href: '/complaints', moduleId: 'complaints', icon: 'admission.svg', lightIcon: 'admission.svg' },
+  { label: 'Reports', href: '/reports', moduleId: 'reports', icon: 'analytics.svg' },
 ]
 
 function getIconPath(icon: string, lightIcon: string | undefined, resolvedTheme: string | undefined) {
@@ -138,10 +161,23 @@ function routeIsActive(pathname: string, href: string) {
   return pathname === cleanHref || pathname.startsWith(`${cleanHref}/`)
 }
 
+const studentPlacementNav: NavGroup = {
+  label: 'Placement',
+  icon: 'career.svg',
+  children: [
+    {
+      label: 'Eligible Jobs',
+      href: '/placement/my-jobs',
+      moduleId: 'placement',
+      icon: 'career.svg',
+    },
+  ],
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { resolvedTheme, setTheme } = useTheme()
-  const { user, role, logout, canModule } = useDemoAuth()
+  const { user, role, logout, canModule, parentRoleId } = useDemoAuth()
 
   const {
     activeBranchId,
@@ -170,6 +206,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const logoSrc = mounted && resolvedTheme === 'light' ? '/pixlpluz-dark-logo.svg' : '/pixlpluz-white-logo.svg'
 
   const visibleNavGroups = useMemo(() => {
+    if (parentRoleId === 'student') {
+      return navGroups
+        .map((group) => {
+          if (group.label === 'Placement') return studentPlacementNav
+
+          if (group.children) {
+            const children = group.children.filter((child) => canModule(child.moduleId))
+            return children.length ? { ...group, children } : null
+          }
+
+          return group.moduleId && canModule(group.moduleId) ? group : null
+        })
+        .filter(Boolean) as NavGroup[]
+    }
+
     return navGroups
       .map((group) => {
         if (group.children) {
@@ -180,9 +231,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         return group.moduleId && canModule(group.moduleId) ? group : null
       })
       .filter(Boolean) as NavGroup[]
-  }, [canModule, role])
+  }, [canModule, parentRoleId, role])
 
-  const publicPage = pathname === '/login' || pathname === '/'
+  const publicPage =
+    pathname === '/login' ||
+    pathname === '/' ||
+    pathname === '/forgot-password' ||
+    pathname === '/forgot_password' ||
+    pathname === '/reset-password'
 
   if (publicPage) return <>{children}</>
 
@@ -390,12 +446,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {mounted && resolvedTheme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
             </Button>
 
-            <Button variant="ghost" size="icon" className="relative">
-              <Bell className="h-5 w-5" />
-              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-xs font-medium text-white">
-                4
-              </span>
-            </Button>
+            <NotificationsBell />
 
             <DropdownMenu open={profileOpen} onOpenChange={setProfileOpen}>
               <DropdownMenuTrigger asChild>

@@ -30,7 +30,13 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const pathname = request.nextUrl.pathname
-  const isPublic = pathname === '/' || pathname === '/login'
+  const isPublic =
+    pathname === '/' ||
+    pathname === '/login' ||
+    pathname === '/forgot-password' ||
+    pathname === '/forgot_password' ||
+    pathname === '/reset-password' ||
+    pathname.startsWith('/api/auth/')
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone()
@@ -38,7 +44,14 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  if (user && pathname === '/login') {
+  // Normalize underscore typo to hyphen route.
+  if (pathname === '/forgot_password') {
+    const url = request.nextUrl.clone()
+    url.pathname = '/forgot-password'
+    return NextResponse.redirect(url)
+  }
+
+  if (user && (pathname === '/login' || pathname === '/forgot-password')) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     return NextResponse.redirect(url)

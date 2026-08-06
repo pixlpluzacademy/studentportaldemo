@@ -9,6 +9,7 @@ import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-co
 import {
   createTask,
   deleteTask,
+  getAssignmentTypeLabel,
   getStudentTaskSubmitHref,
   isTaskSubmissionClosed,
   type TaskFrequency,
@@ -349,9 +350,9 @@ export default function Page() {
                     }
                     className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                   >
-                    <option value="Daily">Daily Assignment</option>
-                    <option value="Weekly">Weekly Assignment</option>
-                    <option value="One-time">One-time Assignment</option>
+                    <option value="Daily">Daily Assignment (out of 50)</option>
+                    <option value="Weekly">Weekly Assignment (out of 75)</option>
+                    <option value="One-time">Final Project (out of 100)</option>
                   </select>
                 </div>
 
@@ -519,7 +520,7 @@ export default function Page() {
                           <td className="px-4 py-3 text-muted-foreground">{task.batch}</td>
                           <td className="px-4 py-3">
                             <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">
-                              {task.frequency}
+                              {getAssignmentTypeLabel(task.frequency)}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-muted-foreground">{task.assignedBy}</td>

@@ -1,2 +1,5 @@
 import { redirect } from 'next/navigation'
-export default function Page(){ redirect('/hod-review') }
+
+export default function ReviewsPage() {
+  redirect('/task-submissions')
+}

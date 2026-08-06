@@ -55,7 +55,7 @@ function getStatusClass(status: StudentUiStatus) {
 }
 
 function getStudentViewId(student: StudentListRow) {
-  return student.profile_id || student.id
+  return student.id
 }
 
 export default function Page() {
@@ -123,9 +123,7 @@ export default function Page() {
   }, [students, search, filterCourse, filterBatch, filterPlacement, filterStatus, filterGrade])
 
   const activeStudents = filteredStudents.filter((student) => student.status === 'active')
-  const placementEligible = filteredStudents.filter((student) => {
-    return student.placement.toLowerCase() !== 'not started'
-  })
+  const placementEligible = filteredStudents.filter((student) => student.placement_ready)
 
   const resetFilters = () => {
     setSearch('')

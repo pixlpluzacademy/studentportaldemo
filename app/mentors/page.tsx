@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,6 +26,7 @@ import {
   type MentorListRow,
   type MentorUiStatus,
 } from '@/lib/data/mentors'
+import { updateStaffPassword } from '@/lib/data/users'
 import { createClient } from '@/lib/supabase/client'
 
 type CreatedCredentials = {
@@ -150,10 +151,13 @@ function StatCard({ card, iconFolder }: { card: SummaryCard; iconFolder: string 
 }
 
 export default function Page() {
+  const router = useRouter()
   const searchParams = useSearchParams()
-  const { can, user, role } = useAuth()
+  const { can, user, role, parentRoleId } = useAuth()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
+  const canUpdateStaffPassword =
+    parentRoleId === 'super_admin' || parentRoleId === 'company_admin'
 
   const {
     mentors,
@@ -181,6 +185,11 @@ export default function Page() {
   const [loadingAction, setLoadingAction] = useState(false)
   const [createdCredentials, setCreatedCredentials] = useState<CreatedCredentials | null>(null)
   const [copyNotice, setCopyNotice] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [passwordMessage, setPasswordMessage] = useState('')
+  const [passwordError, setPasswordError] = useState('')
 
   const defaultProfileId = mentorTypeProfiles[0]?.id || ''
   const defaultDepartmentId = departments[0]?.id || ''
@@ -225,6 +234,10 @@ export default function Page() {
       joining_date: item.joining_date,
       status: item.status,
     })
+    setNewPassword('')
+    setConfirmPassword('')
+    setPasswordMessage('')
+    setPasswordError('')
     setEditingId(item.id)
     setIsModalOpen(true)
   }, [defaultDepartmentId, defaultProfileId, editingId, loading, mentors, searchParams])
@@ -323,6 +336,19 @@ export default function Page() {
     setEditingId(null)
   }
 
+  const clearPasswordFields = () => {
+    setNewPassword('')
+    setConfirmPassword('')
+    setPasswordMessage('')
+    setPasswordError('')
+  }
+
+  const clearEditQuery = () => {
+    if (searchParams.get('edit')) {
+      router.replace('/mentors', { scroll: false })
+    }
+  }
+
   const openCreateModal = () => {
     const empty = createEmptyForm(defaultProfileId, defaultDepartmentId)
     const defaultProfile = mentorTypeProfiles.find((profile) => profile.id === defaultProfileId)
@@ -333,6 +359,8 @@ export default function Page() {
     setEditingId(null)
     setError('')
     setMessage('')
+    clearPasswordFields()
+    clearEditQuery()
     setIsModalOpen(true)
   }
 
@@ -350,6 +378,7 @@ export default function Page() {
     })
     setError('')
     setMessage('')
+    clearPasswordFields()
     setIsModalOpen(true)
   }
 
@@ -357,6 +386,47 @@ export default function Page() {
     setIsModalOpen(false)
     resetForm()
     setError('')
+    clearPasswordFields()
+    clearEditQuery()
+  }
+
+  const handleUpdatePassword = async () => {
+    if (!editingId || !canUpdateStaffPassword) return
+
+    setPasswordSaving(true)
+    setPasswordError('')
+    setPasswordMessage('')
+
+    if (newPassword.length < 6) {
+      setPasswordError('Password must be at least 6 characters.')
+      setPasswordSaving(false)
+      return
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Password and confirm password do not match.')
+      setPasswordSaving(false)
+      return
+    }
+
+    const token = await getAccessToken()
+    if (!token) {
+      setPasswordError('Session expired. Please login again.')
+      setPasswordSaving(false)
+      return
+    }
+
+    const result = await updateStaffPassword(editingId, newPassword, confirmPassword, token)
+    setPasswordSaving(false)
+
+    if (!result.ok) {
+      setPasswordError(result.error)
+      return
+    }
+
+    setPasswordMessage('Password updated successfully.')
+    setNewPassword('')
+    setConfirmPassword('')
   }
 
   const handleSubmitMentor = async (event: FormEvent<HTMLFormElement>) => {
@@ -919,6 +989,64 @@ export default function Page() {
                   </select>
                 </div>
               </div>
+
+              {editingId && canUpdateStaffPassword && (
+                <div className="mt-6 border border-border bg-background/60 p-4">
+                  <h3 className="text-base font-semibold">Update Password</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Set a new login password for this staff member when email reset is not possible.
+                  </p>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="mb-2 block text-sm font-medium">New Password</label>
+                      <input
+                        type="password"
+                        value={newPassword}
+                        onChange={(event) => setNewPassword(event.target.value)}
+                        className={inputClass}
+                        placeholder="Minimum 6 characters"
+                        autoComplete="new-password"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm font-medium">Confirm Password</label>
+                      <input
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(event) => setConfirmPassword(event.target.value)}
+                        className={inputClass}
+                        placeholder="Re-enter password"
+                        autoComplete="new-password"
+                      />
+                    </div>
+                  </div>
+
+                  {passwordError && (
+                    <div className="mt-4 border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                      {passwordError}
+                    </div>
+                  )}
+
+                  {passwordMessage && (
+                    <div className="mt-4 border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
+                      {passwordMessage}
+                    </div>
+                  )}
+
+                  <div className="mt-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={passwordSaving}
+                      onClick={() => void handleUpdatePassword()}
+                    >
+                      {passwordSaving ? 'Updating…' : 'Update Password'}
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {error && (
                 <div className="mt-4 border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">

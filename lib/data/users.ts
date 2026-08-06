@@ -525,6 +525,37 @@ export async function deleteUserAccount(
   }
 }
 
+export async function updateStaffPassword(
+  profileId: string,
+  password: string,
+  confirmPassword: string,
+  accessToken: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const response = await fetch('/api/admin/update-password', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ profileId, password, confirmPassword }),
+    })
+
+    const payload = (await response.json()) as { error?: string }
+
+    if (!response.ok) {
+      return { ok: false, error: payload.error || 'Could not update password.' }
+    }
+
+    return { ok: true }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not update password.',
+    }
+  }
+}
+
 export function getAccessScope(user: UserListRow) {
   if (user.permission_profile_slug === 'super_admin_full') return 'Full system access'
   if (!user.branch_id && (user.parent_role_id === 'company_admin' || user.parent_role_id === 'super_admin')) {

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { useUsersData } from '@/lib/data/hooks/use-users'
@@ -15,6 +15,7 @@ import {
   isSuperAdminUserRow,
   sortUsersByParentRoleHierarchy,
   canViewDirectoryUser,
+  updateStaffPassword,
   updateUserProfile,
   updateUserStatus,
   type UserFormInput,
@@ -96,6 +97,7 @@ async function getAccessToken() {
 }
 
 export default function Page() {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const { user, role, can, refreshSession, parentRoleId } = useAuth()
   const { activeBranchId, allowedBranches, hasAllBranchAccess } = useBranchScope()
@@ -111,6 +113,8 @@ export default function Page() {
   } = useUsersData()
   const { resolvedTheme } = useTheme()
   const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
+  const canUpdateStaffPassword =
+    parentRoleId === 'super_admin' || parentRoleId === 'company_admin'
 
   const defaultProfileId = permissionProfiles[0]?.id || ''
 
@@ -125,6 +129,10 @@ export default function Page() {
   const [createdCredentials, setCreatedCredentials] = useState<CreatedCredentials | null>(null)
   const [copyNotice, setCopyNotice] = useState('')
   const [saving, setSaving] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [passwordNotice, setPasswordNotice] = useState('')
 
   // useEffect(() => {
   //   if (activeBranchId) {
@@ -148,6 +156,9 @@ export default function Page() {
       branch_id: item.branch_id,
       status: item.status,
     })
+    setNewPassword('')
+    setConfirmPassword('')
+    setPasswordNotice('')
     setEditingUserId(item.id)
     setSelectedUserId(item.id)
   }, [defaultProfileId, editingUserId, loading, parentRoleId, searchParams, users])
@@ -207,9 +218,61 @@ export default function Page() {
     return allowedBranches.find((item) => item.id === branchId)?.name || branchId
   }
 
+  const clearPasswordFields = () => {
+    setNewPassword('')
+    setConfirmPassword('')
+    setPasswordNotice('')
+  }
+
+  const clearEditQuery = () => {
+    if (searchParams.get('edit')) {
+      router.replace('/users', { scroll: false })
+    }
+  }
+
   const resetForm = () => {
     setFormUser(createEmptyForm(activeBranchId, defaultProfileId))
     setEditingUserId(null)
+    clearPasswordFields()
+    clearEditQuery()
+  }
+
+  const handleUpdatePassword = async () => {
+    if (!editingUserId || !canUpdateStaffPassword) return
+
+    setPasswordSaving(true)
+    setPasswordNotice('')
+
+    if (newPassword.length < 6) {
+      setPasswordNotice('Password must be at least 6 characters.')
+      setPasswordSaving(false)
+      return
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordNotice('Password and confirm password do not match.')
+      setPasswordSaving(false)
+      return
+    }
+
+    const token = await getAccessToken()
+    if (!token) {
+      setPasswordNotice('Session expired. Please login again.')
+      setPasswordSaving(false)
+      return
+    }
+
+    const result = await updateStaffPassword(editingUserId, newPassword, confirmPassword, token)
+    setPasswordSaving(false)
+
+    if (!result.ok) {
+      setPasswordNotice(result.error)
+      return
+    }
+
+    setPasswordNotice('Password updated successfully.')
+    setNewPassword('')
+    setConfirmPassword('')
   }
 
   const copyCredential = async (label: string, text: string) => {
@@ -339,6 +402,7 @@ export default function Page() {
     })
     setEditingUserId(item.id)
     setSelectedUserId(item.id)
+    clearPasswordFields()
     setNotice(`Editing ${item.full_name}.`)
   }
 
@@ -612,6 +676,58 @@ export default function Page() {
                   </select>
                 </label>
               </div>
+
+              {editingUserId && canUpdateStaffPassword && (
+                <div className="mt-5 border border-border bg-background/60 p-4">
+                  <h3 className="text-base font-semibold">Update Password</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Set a new login password for this staff member when email reset is not possible.
+                  </p>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <label className="space-y-2">
+                      <span className="text-sm font-semibold">New Password</span>
+                      <input
+                        type="password"
+                        value={newPassword}
+                        onChange={(event) => setNewPassword(event.target.value)}
+                        className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
+                        placeholder="Minimum 6 characters"
+                        autoComplete="new-password"
+                      />
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-semibold">Confirm Password</span>
+                      <input
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(event) => setConfirmPassword(event.target.value)}
+                        className="h-11 w-full border border-border bg-background px-3 outline-none focus:border-[#153e90]"
+                        placeholder="Re-enter password"
+                        autoComplete="new-password"
+                      />
+                    </label>
+                  </div>
+
+                  {passwordNotice && (
+                    <div className="mt-4 border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
+                      {passwordNotice}
+                    </div>
+                  )}
+
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      disabled={passwordSaving}
+                      onClick={() => void handleUpdatePassword()}
+                      className="inline-flex items-center gap-2 border border-border px-4 py-2 text-sm font-semibold hover:bg-accent disabled:opacity-50"
+                    >
+                      {passwordSaving ? 'Updating…' : 'Update Password'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-5 flex flex-wrap gap-3">
                 <button

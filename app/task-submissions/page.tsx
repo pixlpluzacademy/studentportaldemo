@@ -5,13 +5,29 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { useTaskSubmissions } from '@/lib/data/hooks/use-task-submissions'
-import { getReviewStageLabel, getStudentResubmitHref, type TaskSubmissionListRow } from '@/lib/data/task-submissions'
+import {
+  getReviewStageLabel,
+  getStudentResubmitHref,
+  openTaskSubmissionFile,
+  type TaskSubmissionListRow,
+} from '@/lib/data/task-submissions'
 import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import { createClient } from '@/lib/supabase/client'
+
+async function getAccessToken() {
+  const supabase = createClient()
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token || null
+}
 
 const today = new Date().toISOString().slice(0, 10)
 
 function getStatusClass(status: string) {
   const value = status.toLowerCase()
+
+  if (value.includes('reject') || value.includes('revision')) {
+    return 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200'
+  }
 
   if (value.includes('submitted') || value.includes('waiting')) {
     return 'border-[#153e90]/30 bg-[#153e90]/10 text-[#153e90] dark:border-[#6ee75a]/30 dark:bg-[#6ee75a]/10 dark:text-white'
@@ -23,10 +39,6 @@ function getStatusClass(status: string) {
 
   if (value.includes('qa') || value.includes('approved') || value.includes('validated') || value.includes('completed')) {
     return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-  }
-
-  if (value.includes('reject') || value.includes('revision')) {
-    return 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200'
   }
 
   return 'border-border bg-background text-foreground'
@@ -99,16 +111,45 @@ export default function Page() {
   }, [activeBranchId, branchLoading, isStudent, parentRoleId, user?.id])
 
   const { submissions, loading, error } = useTaskSubmissions(batchLookup)
+  const [actionNotice, setActionNotice] = useState('')
+  const [openingFileId, setOpeningFileId] = useState<string | null>(null)
 
   const visibleSubmissions = useMemo(() => {
     if (!batchLookup.size) return submissions
     return submissions.filter((submission) => !submission.batchId || batchLookup.has(submission.batchId))
   }, [batchLookup, submissions])
 
-  const submittedCount = visibleSubmissions.filter((submission) => submission.status.toLowerCase().includes('submitted')).length
-  const mentorReviewedCount = visibleSubmissions.filter((submission) => submission.mentorStatus.toLowerCase().includes('reviewed')).length
-  const hodReviewedCount = visibleSubmissions.filter((submission) => submission.hodStatus.toLowerCase().includes('approved')).length
-  const qaCompletedCount = visibleSubmissions.filter((submission) => submission.qaStatus.toLowerCase().includes('approved')).length
+  const handleViewFile = async (submission: TaskSubmissionListRow) => {
+    setActionNotice('')
+    setOpeningFileId(submission.id)
+
+    const accessToken = await getAccessToken()
+    if (!accessToken) {
+      setActionNotice('Session expired. Please login again.')
+      setOpeningFileId(null)
+      return
+    }
+
+    const result = await openTaskSubmissionFile(submission, accessToken, 'view')
+    setOpeningFileId(null)
+
+    if (!result.ok) {
+      setActionNotice(result.error || 'Failed to open submission file.')
+    }
+  }
+
+  const submittedCount = visibleSubmissions.filter(
+    (submission) => getReviewStageLabel(submission) === 'Waiting for Mentor',
+  ).length
+  const mentorReviewedCount = visibleSubmissions.filter(
+    (submission) => getReviewStageLabel(submission) === 'Ready for HOD',
+  ).length
+  const hodReviewedCount = visibleSubmissions.filter(
+    (submission) => getReviewStageLabel(submission) === 'Ready for Final QA',
+  ).length
+  const qaCompletedCount = visibleSubmissions.filter(
+    (submission) => getReviewStageLabel(submission) === 'Final QA Completed',
+  ).length
 
   if (!can('submissions.view')) {
     return (
@@ -135,9 +176,9 @@ export default function Page() {
         </div>
       </div>
 
-      {error && (
+      {(error || actionNotice) && (
         <div className="border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
-          {error}
+          {actionNotice || error}
         </div>
       )}
 
@@ -249,12 +290,14 @@ export default function Page() {
 
                     <td className="px-4 py-4 align-top">
                       <div className="flex justify-end gap-2">
-                        <Link
-                          href={`/task-submissions/${submission.id}`}
-                          className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
+                        <button
+                          type="button"
+                          onClick={() => void handleViewFile(submission)}
+                          disabled={openingFileId === submission.id}
+                          className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent disabled:opacity-50"
                         >
-                          View
-                        </Link>
+                          {openingFileId === submission.id ? 'Opening…' : 'View'}
+                        </button>
 
                         {!isStudent && (can('submissions.review') || can('hod_review.review') || can('final_qa.validate')) && (
                           <Link

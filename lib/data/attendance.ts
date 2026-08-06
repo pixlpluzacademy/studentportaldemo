@@ -17,9 +17,89 @@ export type AttendanceBatch = {
   start_date: string
   end_date: string
   class_day_type: ClassDayType
+  custom_days?: string[]
   start_time: string | null
   end_time: string | null
   class_link: string | null
+}
+
+const WEEKDAY_NAMES = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+] as const
+
+/** True when the date falls within the batch start/end range. */
+export function isDateInsideBatchRange(
+  dateValue: string,
+  startDate?: string | null,
+  endDate?: string | null,
+) {
+  if (!dateValue || !startDate || !endDate) return false
+
+  const selected = new Date(`${dateValue}T00:00:00`)
+  const start = new Date(`${startDate}T00:00:00`)
+  const end = new Date(`${endDate}T00:00:00`)
+
+  if (
+    Number.isNaN(selected.getTime()) ||
+    Number.isNaN(start.getTime()) ||
+    Number.isNaN(end.getTime())
+  ) {
+    return false
+  }
+
+  return selected >= start && selected <= end
+}
+
+/** True when the date matches the batch class-day schedule. */
+export function isScheduledClassDay(
+  dateValue: string,
+  classDayType: ClassDayType,
+  customDays: string[] = [],
+) {
+  if (!dateValue) return false
+
+  const date = new Date(`${dateValue}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return false
+
+  const day = date.getDay()
+
+  if (classDayType === 'weekdays') return day >= 1 && day <= 5
+  if (classDayType === 'weekend') return day === 0 || day === 6
+
+  const normalized = customDays
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+
+  // Custom day picker is not persisted yet — treat as every day until configured.
+  if (normalized.length === 0) return true
+
+  return normalized.includes(WEEKDAY_NAMES[day])
+}
+
+/** True when the date is both inside the batch range and on a scheduled class day. */
+export function isAttendanceClassDay(
+  dateValue: string,
+  options: {
+    startDate?: string | null
+    endDate?: string | null
+    classDayType: ClassDayType
+    customDays?: string[]
+  },
+) {
+  // If batch dates exist, anything outside that window is not a class day.
+  if (options.startDate && options.endDate) {
+    if (!isDateInsideBatchRange(dateValue, options.startDate, options.endDate)) {
+      return false
+    }
+  }
+
+  return isScheduledClassDay(dateValue, options.classDayType, options.customDays || [])
 }
 
 export type AttendanceStudent = {
@@ -149,6 +229,7 @@ export function mapBatchListRowToAttendanceBatch(batch: BatchListRow): Attendanc
     start_date: batch.start_date || '',
     end_date: batch.end_date || '',
     class_day_type: batch.class_day_type,
+    custom_days: batch.custom_days || [],
     start_time: batch.batch_start_time,
     end_time: batch.batch_end_time,
     class_link: batch.class_link,
@@ -301,6 +382,53 @@ export async function fetchBatchAttendanceAverages(
   })
 
   return result
+}
+
+/** Per student+batch attendance label for directory lists. Key: `${studentId}:${batchId}` */
+export async function fetchEnrollmentAttendanceLabels(
+  enrollments: { studentId: string; batchId: string }[],
+  supabase?: SupabaseClient,
+): Promise<Map<string, string>> {
+  const client = supabase ?? createClient()
+  const labels = new Map<string, string>()
+
+  if (!enrollments.length) return labels
+
+  const batchIds = Array.from(new Set(enrollments.map((item) => item.batchId).filter(Boolean)))
+  const studentIds = Array.from(new Set(enrollments.map((item) => item.studentId).filter(Boolean)))
+
+  enrollments.forEach((item) => {
+    labels.set(`${item.studentId}:${item.batchId}`, '—')
+  })
+
+  if (!batchIds.length || !studentIds.length) return labels
+
+  const { data, error } = await client
+    .from('student_attendance_records')
+    .select('batch_id, student_id, status')
+    .in('batch_id', batchIds)
+    .in('student_id', studentIds)
+
+  if (error || !data?.length) return labels
+
+  const grouped = new Map<string, AttendanceMark[]>()
+
+  for (const row of data as { batch_id: string; student_id: string; status: AttendanceMark }[]) {
+    const key = `${row.student_id}:${row.batch_id}`
+    const list = grouped.get(key) || []
+    list.push(row.status)
+    grouped.set(key, list)
+  }
+
+  grouped.forEach((statuses, key) => {
+    const marked = statuses.filter((status) => status !== 'unmarked')
+    const percent = marked.length
+      ? Math.round((marked.filter((status) => status === 'present').length / marked.length) * 100)
+      : 0
+    labels.set(key, formatAttendanceAverageLabel(percent, marked.length > 0))
+  })
+
+  return labels
 }
 
 export function buildCourseAttendanceSummaries(

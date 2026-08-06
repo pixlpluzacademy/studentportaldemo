@@ -207,10 +207,42 @@ export default function Page() {
   const [resubmitDeadlineTime, setResubmitDeadlineTime] = useState('')
 
   const isStudent = isStudentMyCoursesView(parentRoleId)
+  const isElevatedAdmin =
+    parentRoleId === 'super_admin' || parentRoleId === 'company_admin'
 
-  const canMentorReview = !isStudent && can('submissions.review')
-  const canHodReview = !isStudent && (can('hod_review.review') || can('hod_review.approve'))
-  const canQaReview = !isStudent && (can('final_qa.validate') || can('final_qa.approve'))
+  // Stage ownership: HOD / Final QA profiles often also have submissions.review,
+  // but they must not edit the mentor block. Elevated admins can edit all stages.
+  const hasHodReviewPermission =
+    can('hod_review.review') || can('hod_review.approve')
+  const hasQaReviewPermission =
+    can('final_qa.validate') || can('final_qa.approve')
+  const hasMentorReviewPermission = can('submissions.review')
+
+  const canMentorReview =
+    !isStudent &&
+    (isElevatedAdmin ||
+      (hasMentorReviewPermission && !hasHodReviewPermission && !hasQaReviewPermission))
+  const canHodReview = !isStudent && (isElevatedAdmin || hasHodReviewPermission)
+  const canQaReview = !isStudent && (isElevatedAdmin || hasQaReviewPermission)
+
+  const mentorStageOpen =
+    canMentorReview &&
+    (submission?.mentorDecision === 'Pending' ||
+      submission?.mentorDecision === 'Revision Requested' ||
+      submission?.mentorDecision === 'Rejected' ||
+      !submission)
+  const hodStageOpen =
+    canHodReview &&
+    submission?.mentorDecision === 'Approved' &&
+    (submission?.hodDecision === 'Pending' ||
+      submission?.hodDecision === 'Revision Requested' ||
+      submission?.hodDecision === 'Rejected')
+  const qaStageOpen =
+    canQaReview &&
+    submission?.hodDecision === 'Approved' &&
+    (submission?.qaDecision === 'Pending' ||
+      submission?.qaDecision === 'Revision Requested' ||
+      submission?.qaDecision === 'Rejected')
 
   useEffect(() => {
     if (!submissionId || branchLoading || !user?.id) return
@@ -326,45 +358,89 @@ export default function Page() {
     setSubmission((current) => {
       if (!current) return current
 
-      const next = { ...current, status: decision === 'Approved' ? current.status : decision === 'Rejected' ? 'Rejected' : 'Revision Requested' }
+      const isSendBack = decision === 'Rejected' || decision === 'Revision Requested'
+      const stageStatus =
+        decision === 'Approved'
+          ? current.status
+          : decision === 'Rejected'
+            ? stage === 'hod'
+              ? 'Rejected by HOD'
+              : stage === 'qa'
+                ? 'Rejected by Final QA'
+                : 'Rejected'
+            : stage === 'hod'
+              ? 'HOD Revision Requested'
+              : stage === 'qa'
+                ? 'Final QA Revision Requested'
+                : 'Mentor Revision Requested'
+
+      const deadlineDisplay = isSendBack
+        ? `${resubmitDeadlineDate}${resubmitUseTime && resubmitDeadlineTime ? ` · ${resubmitDeadlineTime}` : ''}`
+        : current.resubmitDeadlineDisplay
 
       if (stage === 'mentor') {
         return {
-          ...next,
+          ...current,
+          status: stageStatus,
           mentorDecision: decision,
-          mentorStatus: decision === 'Pending' ? 'Pending' : 'Reviewed',
-          canResubmit: decision === 'Rejected' || decision === 'Revision Requested',
-          resubmitDeadlineDisplay:
-            decision === 'Rejected' || decision === 'Revision Requested'
-              ? `${resubmitDeadlineDate}${resubmitUseTime && resubmitDeadlineTime ? ` · ${resubmitDeadlineTime}` : ''}`
-              : current.resubmitDeadlineDisplay,
-          resubmitDeadlineDate:
-            decision === 'Rejected' || decision === 'Revision Requested' ? resubmitDeadlineDate : current.resubmitDeadlineDate,
+          mentorStatus: decision,
+          canResubmit: isSendBack,
+          resubmitDeadlineDisplay: deadlineDisplay,
+          resubmitDeadlineDate: isSendBack ? resubmitDeadlineDate : current.resubmitDeadlineDate,
           resubmitDeadlineTime:
-            (decision === 'Rejected' || decision === 'Revision Requested') && resubmitUseTime
-              ? resubmitDeadlineTime
-              : current.resubmitDeadlineTime,
+            isSendBack && resubmitUseTime ? resubmitDeadlineTime : current.resubmitDeadlineTime,
         }
       }
 
       if (stage === 'hod') {
+        // HOD send-back clears mentor marks so review restarts after student re-upload.
         return {
-          ...next,
+          ...current,
+          status: stageStatus,
           hodDecision: decision,
           hodStatus: decision,
-          canResubmit: decision === 'Rejected' || decision === 'Revision Requested',
-          resubmitDeadlineDisplay:
-            decision === 'Rejected' || decision === 'Revision Requested'
-              ? `${resubmitDeadlineDate}${resubmitUseTime && resubmitDeadlineTime ? ` · ${resubmitDeadlineTime}` : ''}`
-              : current.resubmitDeadlineDisplay,
+          canResubmit: isSendBack,
+          resubmitDeadlineDisplay: deadlineDisplay,
+          resubmitDeadlineDate: isSendBack ? resubmitDeadlineDate : current.resubmitDeadlineDate,
+          resubmitDeadlineTime:
+            isSendBack && resubmitUseTime ? resubmitDeadlineTime : current.resubmitDeadlineTime,
+          ...(isSendBack
+            ? {
+                mentorDecision: 'Pending' as ReviewDecision,
+                mentorStatus: 'Pending',
+                mentorMark: '-',
+                mentorComment: 'No mentor comment yet.',
+                qaDecision: 'Pending' as ReviewDecision,
+                qaStatus: 'Pending',
+                qaMark: '-',
+                qaComment: 'No final QA comment yet.',
+              }
+            : {}),
         }
       }
 
       return {
-        ...next,
+        ...current,
+        status: stageStatus,
         qaDecision: decision,
         qaStatus: decision,
-        canResubmit: decision === 'Rejected' || decision === 'Revision Requested',
+        canResubmit: isSendBack,
+        resubmitDeadlineDisplay: deadlineDisplay,
+        resubmitDeadlineDate: isSendBack ? resubmitDeadlineDate : current.resubmitDeadlineDate,
+        resubmitDeadlineTime:
+          isSendBack && resubmitUseTime ? resubmitDeadlineTime : current.resubmitDeadlineTime,
+        ...(isSendBack
+          ? {
+              mentorDecision: 'Pending' as ReviewDecision,
+              mentorStatus: 'Pending',
+              mentorMark: '-',
+              mentorComment: 'No mentor comment yet.',
+              hodDecision: 'Pending' as ReviewDecision,
+              hodStatus: 'Pending',
+              hodMark: '-',
+              hodComment: 'No HOD comment yet.',
+            }
+          : {}),
       }
     })
 
@@ -526,7 +602,7 @@ export default function Page() {
               <div className="border border-border bg-background/60 p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Uploaded File</div>
                 <div className="mt-2 font-semibold">{submission.fileName}</div>
-                {submission.filePath && (
+                {(submission.filePath || (submission.fileName && submission.fileName !== '-')) && (
                   <button
                     type="button"
                     onClick={() => void handlePreviewFile()}
@@ -546,7 +622,7 @@ export default function Page() {
             </div>
           </div>
 
-          {submission.submissionHistory.length > 0 && (
+          {(submission.submissionHistory?.length || 0) > 0 && (
             <div className="border border-border bg-card p-5">
               <h3 className="text-lg font-bold">Submission History</h3>
               <p className="mt-1 text-sm text-muted-foreground">Every submit and re-upload attempt is stored here.</p>
@@ -596,9 +672,9 @@ export default function Page() {
             mark={submission.mentorMark === '-' ? '' : submission.mentorMark}
             comment={submission.mentorComment}
             decision={submission.mentorDecision}
-            canReview={canMentorReview}
+            canReview={Boolean(mentorStageOpen)}
             saving={saving}
-            showResubmitDeadline={canMentorReview}
+            showResubmitDeadline={Boolean(mentorStageOpen)}
             resubmitDeadlineDate={resubmitDeadlineDate}
             resubmitDeadlineTime={resubmitDeadlineTime}
             resubmitUseTime={resubmitUseTime}
@@ -616,9 +692,9 @@ export default function Page() {
             mark={submission.hodMark === '-' ? '' : submission.hodMark}
             comment={submission.hodComment}
             decision={submission.hodDecision}
-            canReview={canHodReview}
+            canReview={Boolean(hodStageOpen)}
             saving={saving}
-            showResubmitDeadline={canHodReview}
+            showResubmitDeadline={Boolean(hodStageOpen)}
             resubmitDeadlineDate={resubmitDeadlineDate}
             resubmitDeadlineTime={resubmitDeadlineTime}
             resubmitUseTime={resubmitUseTime}
@@ -636,9 +712,9 @@ export default function Page() {
             mark={submission.qaMark === '-' ? '' : submission.qaMark}
             comment={submission.qaComment}
             decision={submission.qaDecision}
-            canReview={canQaReview}
+            canReview={Boolean(qaStageOpen)}
             saving={saving}
-            showResubmitDeadline={canQaReview}
+            showResubmitDeadline={Boolean(qaStageOpen)}
             resubmitDeadlineDate={resubmitDeadlineDate}
             resubmitDeadlineTime={resubmitDeadlineTime}
             resubmitUseTime={resubmitUseTime}

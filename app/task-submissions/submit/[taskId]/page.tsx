@@ -9,6 +9,7 @@ import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-co
 import {
   fetchStudentIdByProfileId,
   fetchTaskById,
+  getAssignmentTypeLabel,
   isTaskSubmissionClosed,
   openTaskBriefFile,
   submitTask,
@@ -112,8 +113,11 @@ export default function TaskSubmitPage() {
     }
   }, [activeBranchId, branchLoading, isStudent, parentRoleId, taskId, user?.id])
 
+  const canResubmit = Boolean(task?.canResubmit)
+
   const displayStatus = useMemo(() => {
     if (!task) return ''
+    if (task.canResubmit) return 'Revision Requested'
     const closed = isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed'
     if (closed) return 'Submission Closed'
     if (task.studentSubmitted) return 'Submitted'
@@ -122,6 +126,7 @@ export default function TaskSubmitPage() {
 
   const closed = useMemo(() => {
     if (!task) return false
+    if (task.canResubmit) return false
     return isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed'
   }, [task])
 
@@ -133,7 +138,7 @@ export default function TaskSubmitPage() {
       return
     }
 
-    if (task.studentSubmitted && task.studentSubmissionId) {
+    if (task.studentSubmitted && task.studentSubmissionId && !task.canResubmit) {
       router.push(`/task-submissions/${task.studentSubmissionId}`)
       return
     }
@@ -240,7 +245,7 @@ export default function TaskSubmitPage() {
             <span className={`border px-2 py-1 text-xs font-semibold ${getStatusClass(displayStatus)}`}>
               {displayStatus}
             </span>
-            <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">{task.frequency}</span>
+            <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">{getAssignmentTypeLabel(task.frequency)}</span>
           </div>
           <h1 className="mt-3 text-3xl font-bold tracking-tight">{task.title}</h1>
           <p className="mt-2 max-w-3xl text-muted-foreground">{task.description}</p>
@@ -263,10 +268,20 @@ export default function TaskSubmitPage() {
           <div className="mt-1 font-semibold">{task.batch}</div>
         </div>
         <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Submission Deadline</div>
-          <div className="mt-1 font-semibold">{task.dueDisplay}</div>
-          {task.dueTime && (
-            <div className="mt-2 text-xs text-[#153e90] dark:text-[#6ee75a]">Time scheduled for this task</div>
+          <div className="text-xs text-muted-foreground">
+            {canResubmit ? 'Re-upload Deadline' : 'Submission Deadline'}
+          </div>
+          <div className="mt-1 font-semibold">
+            {canResubmit ? task.resubmitDeadlineDisplay || task.dueDisplay : task.dueDisplay}
+          </div>
+          {canResubmit ? (
+            <div className="mt-2 text-xs text-[#153e90] dark:text-[#6ee75a]">
+              Teacher requested revision — upload before this deadline
+            </div>
+          ) : (
+            task.dueTime && (
+              <div className="mt-2 text-xs text-[#153e90] dark:text-[#6ee75a]">Time scheduled for this task</div>
+            )
           )}
         </div>
         <div className="border border-border bg-card p-5">
@@ -292,16 +307,18 @@ export default function TaskSubmitPage() {
           </div>
 
           <div className="border border-border bg-card p-5">
-            <h2 className="text-xl font-bold">Your Submission</h2>
+            <h2 className="text-xl font-bold">{canResubmit ? 'Re-upload Submission' : 'Your Submission'}</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Submit before the deadline{task.dueTime ? ' and scheduled time' : ''}.
+              {canResubmit
+                ? `Re-upload before ${task.resubmitDeadlineDisplay !== '-' ? task.resubmitDeadlineDisplay : 'the re-upload deadline'}.`
+                : `Submit before the deadline${task.dueTime ? ' and scheduled time' : ''}.`}
             </p>
 
             {closed ? (
               <div className="mt-5 border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-200">
                 Submission is closed for this task.
               </div>
-            ) : task.studentSubmitted ? (
+            ) : task.studentSubmitted && !canResubmit ? (
               <div className="mt-5 space-y-4">
                 <div className="border border-[#153e90]/25 bg-[#153e90]/10 px-4 py-3 text-sm text-[#153e90] dark:text-white">
                   You have already submitted this task.
@@ -317,6 +334,55 @@ export default function TaskSubmitPage() {
               </div>
             ) : (
               <div className="mt-5 space-y-4">
+                {canResubmit && (
+                  <div className="space-y-3">
+                    <div className="border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-200">
+                      Revision requested. Upload your updated file before the re-upload deadline.
+                    </div>
+
+                    {task.revisionFeedback && (
+                      <div className="border border-border bg-background/60 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="text-sm font-bold">
+                            {task.revisionFeedback.stage} Feedback
+                          </h3>
+                          <span className="border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs font-semibold text-red-700 dark:text-red-200">
+                            {task.revisionFeedback.decision}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Mark
+                            </div>
+                            <p className="mt-1 text-sm font-semibold">{task.revisionFeedback.mark}</p>
+                          </div>
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              Re-upload Deadline
+                            </div>
+                            <p className="mt-1 text-sm font-semibold">
+                              {task.resubmitDeadlineDisplay !== '-'
+                                ? task.resubmitDeadlineDisplay
+                                : 'Not set'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Comment
+                          </div>
+                          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground">
+                            {task.revisionFeedback.comment || 'No comment added.'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <label className="text-sm font-semibold">Student note (optional)</label>
                   <textarea
@@ -329,7 +395,9 @@ export default function TaskSubmitPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold">Upload work file (optional)</label>
+                  <label className="text-sm font-semibold">
+                    {canResubmit ? 'Upload revised work file' : 'Upload work file (optional)'}
+                  </label>
                   <input
                     type="file"
                     onChange={(event) => setSubmissionFile(event.target.files?.[0] || null)}
@@ -343,7 +411,7 @@ export default function TaskSubmitPage() {
                   onClick={() => void handleSubmit()}
                   className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
                 >
-                  {submitting ? 'Submitting…' : 'Submit Task'}
+                  {submitting ? (canResubmit ? 'Re-uploading…' : 'Submitting…') : canResubmit ? 'Re-upload Task' : 'Submit Task'}
                 </button>
               </div>
             )}

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/lib/auth/provider'
 import { BATCH_MODE_ONSITE_LABEL } from '@/lib/data/batch-code'
-import { createBatchAccount, previewBatchCode, type BatchListRow } from '@/lib/data/batches'
+import { createBatchAccount, previewBatchCode, updateBatchAccount, type BatchListRow } from '@/lib/data/batches'
 import { useBatchList } from '@/lib/data/hooks/use-batches'
 import { useCourseList } from '@/lib/data/hooks/use-courses'
 import { useDepartmentList } from '@/lib/data/hooks/use-departments'
@@ -179,6 +179,7 @@ export default function Page() {
   const [filterStartTime, setFilterStartTime] = useState('all')
   const [filterDuration, setFilterDuration] = useState('all')
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [editingBatchId, setEditingBatchId] = useState<string | null>(null)
 
   const [courseType, setCourseType] = useState<CourseType>('professional')
   const [departmentId, setDepartmentId] = useState('')
@@ -390,9 +391,45 @@ export default function Page() {
 
   const openAddModal = () => {
     resetForm()
+    setEditingBatchId(null)
     setMessage('')
     setError('')
     setIsModalOpen(true)
+  }
+
+  const openEditModal = (batch: BatchListRow) => {
+    const hodAssignment = batch.staff_assignments.find((assignment) => assignment.staff_type === 'hod')
+    const trainerAssignment = batch.staff_assignments.find((assignment) => assignment.staff_type === 'trainer')
+
+    setEditingBatchId(batch.id)
+    setCourseType(batch.course_type)
+    setDepartmentId(batch.department_id || '')
+    setName(batch.name || '')
+    setDescription(batch.description || '')
+    setCourseId(batch.course_id || '')
+    setAcademicLeadId(hodAssignment?.staff_id || '')
+    setAcademicLeadTitle(hodAssignment?.responsibility_title || 'HOD')
+    setSupportMentorId(trainerAssignment?.staff_id || '')
+    setSupportMentorTitle(trainerAssignment?.responsibility_title || 'Trainer')
+    setDurationMonths(String(batch.duration_months || getDurationFromCourseType(batch.course_type)))
+    setStartDate(batch.start_date || '')
+    setEndDate(batch.end_date || '')
+    setBatchMode(batch.batch_mode)
+    setClassDayType(batch.class_day_type || 'weekdays')
+    setBatchStartTime(batch.batch_start_time || '07:00')
+    setBatchEndTime(batch.batch_end_time || '09:00')
+    setMaxSeats(String(batch.max_seats || 20))
+    setClassLink(batch.class_link || '')
+    setStatus(batch.status === 'completed' ? 'completed' : batch.status === 'inactive' ? 'inactive' : 'active')
+    setMessage('')
+    setError('')
+    setIsModalOpen(true)
+  }
+
+  const closeModal = () => {
+    setIsModalOpen(false)
+    setEditingBatchId(null)
+    setError('')
   }
 
   const updateCourseType = (selectedCourseType: CourseType) => {
@@ -448,13 +485,21 @@ export default function Page() {
     setMessage('')
     setError('')
 
-    if (!canCreateBatch) {
+    const isEditing = Boolean(editingBatchId)
+
+    if (isEditing && !canEditBatch) {
+      setError('Your current permission cannot edit batches.')
+      setLoading(false)
+      return
+    }
+
+    if (!isEditing && !canCreateBatch) {
       setError('Your current permission cannot create batches.')
       setLoading(false)
       return
     }
 
-    if (!activeBranchId) {
+    if (!isEditing && !activeBranchId) {
       setError('Select a branch from the header before creating a batch.')
       setLoading(false)
       return
@@ -518,16 +563,18 @@ export default function Page() {
       return
     }
 
-    if (!activeBranch?.code) {
-      setError('Branch code is missing. Set it on the branch before creating a batch.')
-      setLoading(false)
-      return
-    }
+    if (!isEditing) {
+      if (!activeBranch?.code) {
+        setError('Branch code is missing. Set it on the branch before creating a batch.')
+        setLoading(false)
+        return
+      }
 
-    if (!course.department_code) {
-      setError('Department code is missing. Set it on the department before creating a batch.')
-      setLoading(false)
-      return
+      if (!course.department_code) {
+        setError('Department code is missing. Set it on the department before creating a batch.')
+        setLoading(false)
+        return
+      }
     }
 
     const token = await getAccessToken()
@@ -538,26 +585,26 @@ export default function Page() {
       return
     }
 
-    const result = await createBatchAccount(
-      {
-        name: name.trim() || `${course.name} Batch`,
-        description: description.trim(),
-        course_id: courseId,
-        hod_id: academicLeadId,
-        trainer_id: supportMentorId,
-        start_date: startDate,
-        end_date: endDate,
-        batch_mode: batchMode,
-        class_day_type: classDayType,
-        batch_start_time: batchStartTime,
-        batch_end_time: batchEndTime,
-        max_seats: seatCount,
-        class_link: classLink,
-        status,
-      },
-      activeBranchId,
-      token,
-    )
+    const payload = {
+      name: name.trim() || `${course.name} Batch`,
+      description: description.trim(),
+      course_id: courseId,
+      hod_id: academicLeadId,
+      trainer_id: supportMentorId,
+      start_date: startDate,
+      end_date: endDate,
+      batch_mode: batchMode,
+      class_day_type: classDayType,
+      batch_start_time: batchStartTime,
+      batch_end_time: batchEndTime,
+      max_seats: seatCount,
+      class_link: classLink,
+      status,
+    }
+
+    const result = isEditing
+      ? await updateBatchAccount(editingBatchId!, payload, token)
+      : await createBatchAccount(payload, activeBranchId!, token)
 
     if (!result.ok) {
       setError(result.error)
@@ -565,9 +612,13 @@ export default function Page() {
       return
     }
 
-    setMessage(`Batch created successfully. Batch ID: ${result.batchCode}`)
+    setMessage(
+      isEditing
+        ? `Batch updated successfully. Batch ID: ${result.batchCode}`
+        : `Batch created successfully. Batch ID: ${result.batchCode}`,
+    )
     setLoading(false)
-    setIsModalOpen(false)
+    closeModal()
     resetForm()
     await reloadBatches()
   }
@@ -877,7 +928,7 @@ export default function Page() {
                         </Button>
 
                         {canEditBatch && (
-                          <Button type="button">
+                          <Button type="button" onClick={() => openEditModal(batch)}>
                             <CustomIcon icon="submissions.svg" folder={iconFolder} alt="Edit" className="mr-2 h-4 w-4" />
                             Edit
                           </Button>
@@ -897,13 +948,15 @@ export default function Page() {
           <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto border border-border bg-card">
             <div className="flex items-center justify-between border-b border-border p-6">
               <div>
-                <h2 className="text-2xl font-bold">Create Batch</h2>
+                <h2 className="text-2xl font-bold">{editingBatchId ? 'Edit Batch' : 'Create Batch'}</h2>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Create a batch with academic lead and student support mentor hierarchy.
+                  {editingBatchId
+                    ? 'Update batch details, schedule, seats, and HOD/trainer assignments.'
+                    : 'Create a batch with academic lead and student support mentor hierarchy.'}
                 </p>
               </div>
 
-              <button type="button" onClick={() => setIsModalOpen(false)} className="border border-border px-3 py-2 text-sm">
+              <button type="button" onClick={closeModal} className="border border-border px-3 py-2 text-sm">
                 Close
               </button>
             </div>
@@ -1052,10 +1105,21 @@ export default function Page() {
 
                 <div>
                   <label className="mb-2 block text-sm font-medium">Online / {BATCH_MODE_ONSITE_LABEL} Mode</label>
-                  <select value={batchMode} onChange={(e) => setBatchMode(e.target.value as BatchMode)} className={selectClass} required>
+                  <select
+                    value={batchMode}
+                    onChange={(e) => setBatchMode(e.target.value as BatchMode)}
+                    className={selectClass}
+                    required
+                    disabled={Boolean(editingBatchId)}
+                  >
                     <option value="online" className={optionClass}>Online</option>
                     <option value="offline" className={optionClass}>{BATCH_MODE_ONSITE_LABEL}</option>
                   </select>
+                  {editingBatchId && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Mode cannot be changed after a batch is created.
+                    </p>
+                  )}
                 </div>
 
                 <div className="md:col-span-2">
@@ -1106,12 +1170,18 @@ export default function Page() {
               </div>
 
               <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-                <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
+                <Button type="button" variant="outline" onClick={closeModal}>
                   Cancel
                 </Button>
 
                 <Button type="submit" disabled={loading} className="bg-[#153e90] text-white hover:bg-[#153e90]/90 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#5dd84a]">
-                  {loading ? 'Creating...' : 'Create Batch'}
+                  {loading
+                    ? editingBatchId
+                      ? 'Updating...'
+                      : 'Creating...'
+                    : editingBatchId
+                      ? 'Update Batch'
+                      : 'Create Batch'}
                 </Button>
               </div>
             </form>

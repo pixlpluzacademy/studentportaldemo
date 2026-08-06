@@ -11,6 +11,7 @@ import {
   fetchAttendanceRecords,
   fetchStudentIdByProfile,
   fetchStudentsForBatches,
+  isScheduledClassDay,
   mapBatchListRowToAttendanceBatch,
   mapBatchStudentsToAttendanceStudents,
   saveAttendanceMarks,
@@ -142,21 +143,6 @@ const isDateInsideBatchRange = (dateValue: string, batch: AttendanceBatch) => {
   }
 
   return selected >= start && selected <= end
-}
-
-const isValidClassDay = (dateValue: string, classDayType: AttendanceBatch['class_day_type']) => {
-  if (!dateValue) return false
-
-  const date = new Date(`${dateValue}T00:00:00`)
-
-  if (Number.isNaN(date.getTime())) return false
-
-  const day = date.getDay()
-
-  if (classDayType === 'weekdays') return day >= 1 && day <= 5
-  if (classDayType === 'weekend') return day === 0 || day === 6
-
-  return true
 }
 
 export default function Page() {
@@ -321,12 +307,16 @@ export default function Page() {
     ? isDateInsideBatchRange(selectedDate, selectedMarkBatch)
     : false
 
-  const isScheduledClassDay = selectedMarkBatch
-    ? isValidClassDay(selectedDate, selectedMarkBatch.class_day_type)
+  const isMarkDayScheduled = selectedMarkBatch
+    ? isScheduledClassDay(
+        selectedDate,
+        selectedMarkBatch.class_day_type,
+        selectedMarkBatch.custom_days || [],
+      )
     : false
 
   const canShowMarkRegister =
-    Boolean(selectedMarkBatch) && isInsideDateRange && isScheduledClassDay
+    Boolean(selectedMarkBatch) && isInsideDateRange && isMarkDayScheduled
 
   const batchSummary = useMemo(() => {
     return scopedBatches.map((batch) => {
@@ -508,7 +498,7 @@ export default function Page() {
       return
     }
 
-    if (!isScheduledClassDay) {
+    if (!isMarkDayScheduled) {
       setError('No class scheduled for today.')
       return
     }
@@ -1133,7 +1123,7 @@ export default function Page() {
                 </div>
               )}
 
-              {selectedMarkBatch && isInsideDateRange && !isScheduledClassDay && (
+              {selectedMarkBatch && isInsideDateRange && !isMarkDayScheduled && (
                 <div className="mt-4 border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-400">
                   No class scheduled for today.
                 </div>

@@ -1,5 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DataResult } from '@/lib/data/config'
+import { fetchEnrollmentAttendanceLabels, formatAttendanceAverageLabel } from '@/lib/data/attendance'
+import type { ClassDayType } from '@/lib/data/batches'
+import {
+  fetchStudentAcademicPercents,
+  fetchStudentPlacementAttendancePercents,
+  getPlacementEligibility,
+} from '@/lib/data/placement-eligibility'
 import { createClient } from '@/lib/supabase/client'
 
 export type BatchStudentRow = {
@@ -29,11 +36,22 @@ export type StudentListRow = {
   batch_id: string
   batch_name: string
   batch_code: string | null
+  batch_start_date: string | null
+  batch_end_date: string | null
+  batch_class_day_type: ClassDayType
+  batch_custom_days: string[]
   course_name: string
+  department_name: string
   branch_id: string
   attendance: string
   grade: string
   placement: string
+  attendance_percent: number | null
+  academic_percent: number | null
+  placement_ready: boolean
+  placement_batch_completed: boolean
+  placement_attendance_ok: boolean
+  placement_academic_ok: boolean
 }
 
 export type FetchStudentListOptions = {
@@ -92,7 +110,19 @@ type DbStudentListBatchRow = {
   name: string
   code: string | null
   branch_id: string
-  course: { name: string } | { name: string }[] | null
+  start_date: string | null
+  end_date: string | null
+  class_day_type: ClassDayType
+  course:
+    | {
+        name: string
+        department: { name: string } | { name: string }[] | null
+      }
+    | {
+        name: string
+        department: { name: string } | { name: string }[] | null
+      }[]
+    | null
 }
 
 type DbStudentListEnrollmentRow = {
@@ -114,6 +144,7 @@ function mapEnrollmentToStudentListRow(row: DbStudentListEnrollmentRow): Student
 
   const profile = unwrap(student.profile)
   const course = unwrap(batch.course)
+  const department = unwrap(course?.department)
 
   return {
     id: student.id,
@@ -128,11 +159,50 @@ function mapEnrollmentToStudentListRow(row: DbStudentListEnrollmentRow): Student
     batch_id: batch.id,
     batch_name: batch.name,
     batch_code: batch.code,
+    batch_start_date: batch.start_date ? batch.start_date.slice(0, 10) : null,
+    batch_end_date: batch.end_date ? batch.end_date.slice(0, 10) : null,
+    batch_class_day_type: batch.class_day_type || 'weekdays',
+    batch_custom_days: [],
     course_name: course?.name || '—',
+    department_name: department?.name || '—',
     branch_id: batch.branch_id,
     attendance: '—',
     grade: '—',
     placement: 'Not Started',
+    attendance_percent: null,
+    academic_percent: null,
+    placement_ready: false,
+    placement_batch_completed: false,
+    placement_attendance_ok: false,
+    placement_academic_ok: false,
+  }
+}
+
+function applyPlacementEligibility(
+  student: StudentListRow,
+  attendancePercent: number | null,
+  academicPercent: number | null,
+): StudentListRow {
+  const eligibility = getPlacementEligibility(
+    attendancePercent,
+    academicPercent,
+    student.batch_end_date,
+  )
+
+  return {
+    ...student,
+    attendance:
+      attendancePercent === null
+        ? student.attendance
+        : formatAttendanceAverageLabel(attendancePercent, true),
+    grade: eligibility.grade,
+    placement: eligibility.status,
+    attendance_percent: attendancePercent,
+    academic_percent: academicPercent,
+    placement_ready: eligibility.ready,
+    placement_batch_completed: eligibility.batchCompleted,
+    placement_attendance_ok: eligibility.attendanceOk,
+    placement_academic_ok: eligibility.academicOk,
   }
 }
 
@@ -235,8 +305,14 @@ export async function fetchStudentList(
           name,
           code,
           branch_id,
+          start_date,
+          end_date,
+          class_day_type,
           course:courses!inner (
-            name
+            name,
+            department:departments (
+              name
+            )
           )
         )
       `,
@@ -257,12 +333,235 @@ export async function fetchStudentList(
       .map(mapEnrollmentToStudentListRow)
       .filter((row): row is StudentListRow => Boolean(row))
 
-    return { source: 'supabase', data: students }
+    const enrollments = students.map((student) => ({
+      studentId: student.id,
+      batchId: student.batch_id,
+    }))
+
+    const [attendanceLabels, attendancePercents, academicPercents] = await Promise.all([
+      fetchEnrollmentAttendanceLabels(enrollments, client),
+      fetchStudentPlacementAttendancePercents(enrollments, client),
+      fetchStudentAcademicPercents(
+        students.map((student) => student.id),
+        client,
+      ),
+    ])
+
+    const studentsWithEligibility = students.map((student) => {
+      const key = `${student.id}:${student.batch_id}`
+      const withAttendance = {
+        ...student,
+        attendance: attendanceLabels.get(key) || '—',
+      }
+
+      return applyPlacementEligibility(
+        withAttendance,
+        attendancePercents.get(key) ?? null,
+        academicPercents.get(student.id) ?? null,
+      )
+    })
+
+    return { source: 'supabase', data: studentsWithEligibility }
   } catch (error) {
     return {
       source: 'supabase',
       data: [],
       error: error instanceof Error ? error.message : 'Failed to load students.',
+    }
+  }
+}
+
+export async function fetchStudentDetail(
+  studentOrProfileId: string,
+  options: FetchStudentListOptions = {},
+  supabase?: SupabaseClient,
+): Promise<DataResult<StudentListRow | null>> {
+  const client = supabase ?? createClient()
+  const id = studentOrProfileId.trim()
+
+  if (!id) {
+    return { source: 'supabase', data: null, error: 'Student id is required.' }
+  }
+
+  try {
+    let batchIds: string[] | null = null
+
+    if (options.staffUserId) {
+      batchIds = await fetchStaffAssignedBatchIds(options.staffUserId, options.branchId, client)
+      if (batchIds.length === 0) {
+        return {
+          source: 'supabase',
+          data: null,
+          error: 'No assigned batches available for your scope.',
+        }
+      }
+    } else if (options.branchId) {
+      batchIds = await fetchBatchIdsInBranch(options.branchId, client)
+      if (batchIds.length === 0) {
+        return {
+          source: 'supabase',
+          data: null,
+          error: 'No batches found for the selected branch.',
+        }
+      }
+    }
+
+    const { data: studentRows, error: studentError } = await client
+      .from('students')
+      .select(
+        `
+        id,
+        profile_id,
+        student_code,
+        phone,
+        joining_date,
+        status,
+        profile_picture_url,
+        profile:profiles (
+          full_name,
+          email,
+          avatar_url
+        )
+      `,
+      )
+      .or(`id.eq.${id},profile_id.eq.${id}`)
+      .limit(1)
+
+    if (studentError) {
+      return { source: 'supabase', data: null, error: studentError.message }
+    }
+
+    const student = (studentRows || [])[0] as DbEnrollmentStudentRow | undefined
+    if (!student) {
+      return { source: 'supabase', data: null, error: 'Student not found.' }
+    }
+
+    let enrollmentQuery = client
+      .from('student_batch_enrollments')
+      .select(
+        `
+        student:students!inner (
+          id,
+          profile_id,
+          student_code,
+          phone,
+          joining_date,
+          status,
+          profile_picture_url,
+          profile:profiles (
+            full_name,
+            email,
+            avatar_url
+          )
+        ),
+        batch:batches!inner (
+          id,
+          name,
+          code,
+          branch_id,
+          start_date,
+          end_date,
+          class_day_type,
+          course:courses!inner (
+            name,
+            department:departments (
+              name
+            )
+          )
+        )
+      `,
+      )
+      .eq('student_id', student.id)
+      .order('enrolled_at', { ascending: false })
+      .limit(5)
+
+    if (batchIds) {
+      enrollmentQuery = enrollmentQuery.in('batch_id', batchIds)
+    }
+
+    const { data: enrollmentData, error: enrollmentError } = await enrollmentQuery
+
+    if (enrollmentError) {
+      return { source: 'supabase', data: null, error: enrollmentError.message }
+    }
+
+    const mapped = ((enrollmentData || []) as DbStudentListEnrollmentRow[])
+      .map(mapEnrollmentToStudentListRow)
+      .find((row): row is StudentListRow => Boolean(row))
+
+    if (mapped) {
+      const enrollments = [{ studentId: mapped.id, batchId: mapped.batch_id }]
+      const [attendanceLabels, attendancePercents, academicPercents] = await Promise.all([
+        fetchEnrollmentAttendanceLabels(enrollments, client),
+        fetchStudentPlacementAttendancePercents(enrollments, client),
+        fetchStudentAcademicPercents([mapped.id], client),
+      ])
+
+      const key = `${mapped.id}:${mapped.batch_id}`
+      const withAttendance = {
+        ...mapped,
+        attendance: attendanceLabels.get(key) || '—',
+      }
+
+      return {
+        source: 'supabase',
+        data: applyPlacementEligibility(
+          withAttendance,
+          attendancePercents.get(key) ?? null,
+          academicPercents.get(mapped.id) ?? null,
+        ),
+        error: null,
+      }
+    }
+
+    if (options.staffUserId) {
+      return {
+        source: 'supabase',
+        data: null,
+        error: 'Student is not available under your current assigned batch scope.',
+      }
+    }
+
+    const profile = unwrap(student.profile)
+    return {
+      source: 'supabase',
+      data: {
+        id: student.id,
+        profile_id: student.profile_id,
+        full_name: profile?.full_name || 'Unknown',
+        email: profile?.email || '—',
+        student_code: student.student_code,
+        phone: student.phone?.trim() || 'Not added',
+        joining_date: student.joining_date ? student.joining_date.slice(0, 10) : null,
+        status: mapStudentStatus(student.status),
+        avatar_url: student.profile_picture_url || profile?.avatar_url || null,
+        batch_id: '',
+        batch_name: '—',
+        batch_code: null,
+        batch_start_date: null,
+        batch_end_date: null,
+        batch_class_day_type: 'weekdays',
+        batch_custom_days: [],
+        course_name: '—',
+        department_name: '—',
+        branch_id: options.branchId || '',
+        attendance: '—',
+        grade: '—',
+        placement: 'Not Started',
+        attendance_percent: null,
+        academic_percent: null,
+        placement_ready: false,
+        placement_batch_completed: false,
+        placement_attendance_ok: false,
+        placement_academic_ok: false,
+      },
+      error: null,
+    }
+  } catch (error) {
+    return {
+      source: 'supabase',
+      data: null,
+      error: error instanceof Error ? error.message : 'Failed to load student.',
     }
   }
 }
@@ -370,6 +669,49 @@ export async function createStudentAccount(
     return {
       ok: false,
       error: error instanceof Error ? error.message : 'Could not create student.',
+    }
+  }
+}
+
+export async function updateStudentAccount(
+  input: {
+    studentId: string
+    fullName: string
+    email: string
+    phone: string
+    joiningDate: string
+    status: StudentUiStatus
+  },
+  accessToken: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const response = await fetch('/api/admin/update-student', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        studentId: input.studentId,
+        fullName: input.fullName,
+        email: input.email,
+        phone: input.phone,
+        joiningDate: input.joiningDate,
+        status: input.status,
+      }),
+    })
+
+    const payload = (await response.json()) as { error?: string }
+
+    if (!response.ok) {
+      return { ok: false, error: payload.error || 'Could not update student.' }
+    }
+
+    return { ok: true }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not update student.',
     }
   }
 }

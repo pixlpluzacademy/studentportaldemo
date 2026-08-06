@@ -47,6 +47,7 @@ export type ModuleId =
   | 'hod_review'
   | 'final_qa'
   | 'placement'
+  | 'admissions'
   | 'certificates'
   | 'complaints'
   | 'reports'

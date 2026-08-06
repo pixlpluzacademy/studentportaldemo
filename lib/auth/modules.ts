@@ -2,8 +2,11 @@ import { demoModules } from '@/lib/demo/seed'
 import type { ModuleId, PermissionKey } from '@/lib/demo/types'
 
 export function getModuleByHref(pathname: string) {
-  const exact = demoModules.find((m) => pathname === m.href || pathname.startsWith(`${m.href}/`))
-  return exact || null
+  const matches = demoModules
+    .filter((m) => pathname === m.href || pathname.startsWith(`${m.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)
+
+  return matches[0] || null
 }
 
 export function enabledModulesFromPermissions(permissions: string[]): ModuleId[] {

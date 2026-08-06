@@ -6,10 +6,18 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import { fetchBatchStudents, type BatchStudentRow } from '@/lib/data/students'
+import {
+  fetchTaskSubmissions,
+  getReviewStageLabel,
+  openTaskSubmissionFile,
+  type TaskSubmissionListRow,
+} from '@/lib/data/task-submissions'
 import {
   deleteTask,
   fetchStudentIdByProfileId,
   fetchTaskById,
+  getAssignmentTypeLabel,
   getStudentTaskSubmitHref,
   isTaskSubmissionClosed,
   openTaskBriefFile,
@@ -17,19 +25,32 @@ import {
 } from '@/lib/data/tasks'
 import { createClient } from '@/lib/supabase/client'
 
+type StudentSubmissionRow = {
+  studentId: string
+  studentName: string
+  studentCode: string
+  email: string
+  submitted: boolean
+  submission: TaskSubmissionListRow | null
+}
+
 function getStatusClass(status: string) {
   const value = status.toLowerCase()
 
-  if (value.includes('open')) {
+  if (value.includes('open') || value.includes('submitted') || value.includes('waiting')) {
     return 'border-[#153e90]/30 bg-[#153e90]/10 text-[#153e90] dark:border-[#6ee75a]/30 dark:bg-[#6ee75a]/10 dark:text-white'
   }
 
-  if (value.includes('review')) {
+  if (value.includes('review') || value.includes('ready') || value.includes('pending')) {
     return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200'
   }
 
-  if (value.includes('closed')) {
+  if (value.includes('closed') || value.includes('reject') || value.includes('revision')) {
     return 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200'
+  }
+
+  if (value.includes('completed') || value.includes('approved') || value.includes('final')) {
+    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
   }
 
   return 'border-border bg-background text-foreground'
@@ -48,9 +69,12 @@ export default function TaskDetailPage() {
   const { activeBranchId, loading: branchLoading } = useBranchScope()
 
   const [task, setTask] = useState<TaskListRow | null>(null)
+  const [studentRows, setStudentRows] = useState<StudentSubmissionRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [studentsLoading, setStudentsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
+  const [openingFileId, setOpeningFileId] = useState<string | null>(null)
 
   const isStudent = isStudentMyCoursesView(parentRoleId)
 
@@ -100,6 +124,52 @@ export default function TaskDetailPage() {
       setTask(result.data)
       setError(result.error || (result.data ? null : 'Task not found or not in your scope.'))
       setLoading(false)
+
+      if (!result.data || isStudent) {
+        setStudentRows([])
+        return
+      }
+
+      setStudentsLoading(true)
+
+      const [studentsResult, submissionsResult] = await Promise.all([
+        fetchBatchStudents(result.data.batchId),
+        fetchTaskSubmissions({
+          taskId: result.data.id,
+          batchLookup: lookup,
+          batchIds: [result.data.batchId],
+        }),
+      ])
+
+      if (cancelled) return
+
+      const submissionByStudent = new Map(
+        submissionsResult.data.map((submission) => [submission.studentId, submission]),
+      )
+
+      const rows: StudentSubmissionRow[] = (studentsResult.data as BatchStudentRow[])
+        .map((student) => {
+          const submission = submissionByStudent.get(student.id) || null
+          return {
+            studentId: student.id,
+            studentName: student.full_name,
+            studentCode: student.student_code,
+            email: student.email,
+            submitted: Boolean(submission),
+            submission,
+          }
+        })
+        .sort((a, b) => {
+          if (a.submitted !== b.submitted) return a.submitted ? -1 : 1
+          return a.studentName.localeCompare(b.studentName)
+        })
+
+      setStudentRows(rows)
+      setStudentsLoading(false)
+
+      if (studentsResult.error || submissionsResult.error) {
+        setNotice(studentsResult.error || submissionsResult.error || '')
+      }
     }
 
     void loadTask()
@@ -152,6 +222,28 @@ export default function TaskDetailPage() {
     }
   }
 
+  const handleViewSubmissionFile = async (submission: TaskSubmissionListRow) => {
+    setNotice('')
+    setOpeningFileId(submission.id)
+
+    const accessToken = await getAccessToken()
+    if (!accessToken) {
+      setNotice('Session expired. Please login again.')
+      setOpeningFileId(null)
+      return
+    }
+
+    const result = await openTaskSubmissionFile(submission, accessToken, 'view')
+    setOpeningFileId(null)
+
+    if (!result.ok) {
+      setNotice(result.error || 'Failed to open submission file.')
+    }
+  }
+
+  const submittedCount = studentRows.filter((row) => row.submitted).length
+  const pendingCount = studentRows.length - submittedCount
+
   if (!can('tasks.view')) {
     return (
       <div className="border border-border bg-card p-8">
@@ -194,7 +286,7 @@ export default function TaskDetailPage() {
             <span className={`border px-2 py-1 text-xs font-semibold ${getStatusClass(displayStatus)}`}>
               {displayStatus}
             </span>
-            <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">{task.frequency}</span>
+            <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">{getAssignmentTypeLabel(task.frequency)}</span>
           </div>
           <h1 className="mt-3 text-3xl font-bold tracking-tight">{task.title}</h1>
           <p className="mt-2 max-w-3xl text-muted-foreground">{task.description}</p>
@@ -291,6 +383,7 @@ export default function TaskDetailPage() {
               </div>
             </div>
           )}
+
         </div>
 
         <aside className="space-y-5">
@@ -326,6 +419,160 @@ export default function TaskDetailPage() {
           </div>
         </aside>
       </div>
+
+      {!isStudent && (
+        <div className="border border-border bg-card p-5">
+          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+            <div>
+              <h2 className="text-xl font-bold">Student Submissions</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Each student in this batch with their submission status and review details.
+              </p>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              <span className="font-semibold text-foreground">{submittedCount}</span> submitted ·{' '}
+              <span className="font-semibold text-foreground">{pendingCount}</span> pending ·{' '}
+              <span className="font-semibold text-foreground">{studentRows.length}</span> total
+            </div>
+          </div>
+
+          <div className="mt-5 overflow-x-auto">
+            <table className="w-full min-w-[980px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/40 text-left">
+                  <th className="px-4 py-3 font-semibold">Student</th>
+                  <th className="px-4 py-3 font-semibold">Submission</th>
+                  <th className="px-4 py-3 font-semibold">File</th>
+                  <th className="px-4 py-3 font-semibold">Submitted</th>
+                  <th className="px-4 py-3 font-semibold">Mentor</th>
+                  <th className="px-4 py-3 font-semibold">HOD</th>
+                  <th className="px-4 py-3 font-semibold">Final QA</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
+                  <th className="px-4 py-3 text-right font-semibold">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {studentsLoading && (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                      Loading student submissions...
+                    </td>
+                  </tr>
+                )}
+
+                {!studentsLoading &&
+                  studentRows.map((row) => {
+                    const submission = row.submission
+                    const stageLabel = submission ? getReviewStageLabel(submission) : 'Not Submitted'
+
+                    return (
+                      <tr key={row.studentId} className="border-b border-border">
+                        <td className="px-4 py-4 align-top">
+                          <div className="font-semibold text-foreground">{row.studentName}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {row.studentCode} · {row.email}
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <span
+                            className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${
+                              row.submitted
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
+                                : 'border-border bg-background text-muted-foreground'
+                            }`}
+                          >
+                            {row.submitted ? 'Submitted' : 'Not Submitted'}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-4 align-top text-muted-foreground">
+                          <div className="max-w-[180px]">{submission?.fileName || '—'}</div>
+                          {submission?.studentNote ? (
+                            <div className="mt-1 max-w-[180px] text-xs text-muted-foreground">
+                              Note: {submission.studentNote}
+                            </div>
+                          ) : null}
+                        </td>
+
+                        <td className="px-4 py-4 align-top text-muted-foreground">
+                          <div>{submission?.submitted || '—'}</div>
+                          {submission && submission.resubmitted !== '-' ? (
+                            <div className="mt-1 text-xs">Re: {submission.resubmitted}</div>
+                          ) : null}
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <div className="font-semibold">{submission?.mentorMark || '—'}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {submission?.mentorStatus || '—'}
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <div className="font-semibold">{submission?.hodMark || '—'}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {submission?.hodStatus || '—'}
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <div className="font-semibold">{submission?.qaMark || '—'}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {submission?.qaStatus || '—'}
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <span
+                            className={`inline-flex whitespace-nowrap border px-2 py-1 text-xs font-semibold ${getStatusClass(stageLabel)}`}
+                          >
+                            {stageLabel}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-4 align-top">
+                          <div className="flex justify-end gap-2">
+                            {submission ? (
+                              <>
+                                {can('submissions.view') && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleViewSubmissionFile(submission)}
+                                    disabled={openingFileId === submission.id}
+                                    className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent disabled:opacity-60"
+                                  >
+                                    {openingFileId === submission.id ? 'Opening…' : 'View File'}
+                                  </button>
+                                )}
+                                <Link
+                                  href={`/task-submissions/${submission.id}`}
+                                  className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
+                                >
+                                  Review
+                                </Link>
+                              </>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">No file</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+
+                {!studentsLoading && studentRows.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                      No students enrolled in this batch yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

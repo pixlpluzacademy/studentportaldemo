@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Image from 'next/image'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff } from 'lucide-react'
 import { APP_DISPLAY_NAME } from '@/lib/branding'
@@ -83,6 +84,11 @@ export default function LoginPage() {
                 >
                   {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
+              </div>
+              <div className="mt-2 text-right">
+                <Link href="/forgot-password" className="text-sm text-[#6ee75a] hover:underline">
+                  Forgot password?
+                </Link>
               </div>
             </div>
             {error && (

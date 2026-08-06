@@ -70,8 +70,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Batch and attendance date are required.' }, { status: 400 })
     }
 
-    if (attendanceDate !== todayIsoDate()) {
-      return NextResponse.json({ error: 'Attendance can only be marked for today.' }, { status: 400 })
+    const today = todayIsoDate()
+    if (attendanceDate > today) {
+      return NextResponse.json({ error: 'Attendance cannot be marked for a future date.' }, { status: 400 })
     }
 
     if (!marks.length) {
@@ -88,7 +89,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Selected batch not found.' }, { status: 400 })
     }
 
-    if (batch.mode === 'online' && !classLink) {
+    let resolvedClassLink = classLink
+    if (batch.mode === 'online' && !resolvedClassLink) {
+      const { data: existingLink } = await supabaseAdmin
+        .from('student_attendance_records')
+        .select('class_link')
+        .eq('batch_id', batchId)
+        .eq('attendance_date', attendanceDate)
+        .not('class_link', 'is', null)
+        .limit(1)
+        .maybeSingle()
+
+      resolvedClassLink = String(existingLink?.class_link || '').trim()
+    }
+
+    if (batch.mode === 'online' && !resolvedClassLink) {
       return NextResponse.json({ error: 'Online batches require a class link when marking attendance.' }, { status: 400 })
     }
 
@@ -106,7 +121,7 @@ export async function POST(request: Request) {
         attendance_date: attendanceDate,
         status: mark.status,
         notes: mark.note?.trim() || null,
-        class_link: batch.mode === 'online' ? classLink : null,
+        class_link: batch.mode === 'online' ? resolvedClassLink : null,
         marked_by: caller.id,
         updated_at: new Date().toISOString(),
       }))
