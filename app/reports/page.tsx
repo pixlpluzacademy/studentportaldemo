@@ -52,6 +52,23 @@ const selectClass =
 
 const optionClass = 'bg-background text-foreground'
 
+/** Shared Recharts tooltip styles — must set color or labels stay black in dark mode. */
+const chartTooltipStyle = {
+  background: 'var(--card)',
+  border: '1px solid var(--border)',
+  borderRadius: 0,
+  fontSize: 12,
+  color: 'var(--foreground)',
+} as const
+
+const chartTooltipItemStyle = {
+  color: 'var(--foreground)',
+} as const
+
+const chartTooltipLabelStyle = {
+  color: 'var(--foreground)',
+} as const
+
 function getRoleReportTitle(roleName?: string, parentRoleId?: string | null) {
   if (parentRoleId === 'placement') return 'Placement Reports'
   if (parentRoleId === 'mentor') return 'Mentor / Academic Reports'
@@ -273,18 +290,16 @@ function AttendanceTrendChart({
               const dateKey = payload?.[0]?.payload?.dateKey
               return dateKey ? `${label} · ${dateKey}` : String(label)
             }}
-            contentStyle={{
-              background: 'var(--card)',
-              border: '1px solid var(--border)',
-              borderRadius: 0,
-              fontSize: 12,
-            }}
+            contentStyle={chartTooltipStyle}
+            itemStyle={chartTooltipItemStyle}
+            labelStyle={chartTooltipLabelStyle}
           />
           <Legend
             formatter={(value) => {
               const seriesItem = series.find((item) => item.dataKey === value)
               return seriesItem?.batchName || value
             }}
+            wrapperStyle={{ color: 'var(--foreground)' }}
           />
           {series.map((item) => (
             <Area
@@ -483,13 +498,9 @@ function PlacementStageAreaChart({
           />
           <Tooltip
             formatter={(value: number) => [value, 'Count']}
-            contentStyle={{
-              background: 'var(--card)',
-              border: '1px solid var(--border)',
-              borderRadius: 0,
-              fontSize: 12,
-              color: 'var(--foreground)',
-            }}
+            contentStyle={chartTooltipStyle}
+            itemStyle={chartTooltipItemStyle}
+            labelStyle={chartTooltipLabelStyle}
           />
           <Area
             type="monotone"
@@ -665,15 +676,11 @@ function MarksBarChart({
                 }
                 return [`${value} / ${maxMarks} · avg of ${row?.qaCount ?? 0}`, name]
               }}
-              contentStyle={{
-                background: 'var(--card)',
-                border: '1px solid var(--border)',
-                borderRadius: 0,
-                fontSize: 12,
-                color: 'var(--foreground)',
-              }}
+              contentStyle={chartTooltipStyle}
+              itemStyle={chartTooltipItemStyle}
+              labelStyle={chartTooltipLabelStyle}
             />
-            <Legend />
+            <Legend wrapperStyle={{ color: 'var(--foreground)' }} />
             <Bar dataKey="mentorMark" name="Mentor mark" fill="#3b82f6" radius={[2, 2, 0, 0]} />
             <Bar dataKey="hodMark" name="HOD mark" fill="#f59e0b" radius={[2, 2, 0, 0]} />
             <Bar dataKey="finalQaMark" name="Final QA mark" fill="#22c55e" radius={[2, 2, 0, 0]} />
@@ -756,12 +763,9 @@ function ClassicPieChart({
                     metricLabel,
                   ]
                 }}
-                contentStyle={{
-                  background: 'var(--card)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 0,
-                  fontSize: 12,
-                }}
+                contentStyle={chartTooltipStyle}
+                itemStyle={chartTooltipItemStyle}
+                labelStyle={chartTooltipLabelStyle}
               />
             </PieChart>
           </ResponsiveContainer>
