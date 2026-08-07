@@ -503,11 +503,6 @@ export default function Page() {
       return
     }
 
-    if (selectedMarkBatch.mode === 'online' && !classLink.trim()) {
-      setError('Please add Zoom / Google Meet link for this online batch.')
-      return
-    }
-
     if (selectedMarkStudents.length === 0) {
       setError('No students found in this batch.')
       return
@@ -1107,12 +1102,12 @@ export default function Page() {
 
               {selectedMarkBatch && selectedMarkBatch.mode === 'online' && (
                 <div className="mt-4">
-                  <label className="mb-2 block text-sm font-medium">Zoom / Google Meet Link</label>
+                  <label className="mb-2 block text-sm font-medium">Zoom / Google Meet Link (optional)</label>
                   <input
                     value={classLink}
                     onChange={(event) => setClassLink(event.target.value)}
                     className={inputClass}
-                    placeholder="Add online class link"
+                    placeholder="Uses batch link if left empty"
                   />
                 </div>
               )}

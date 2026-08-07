@@ -81,7 +81,7 @@ export async function POST(request: Request) {
 
     const { data: batch, error: batchError } = await supabaseAdmin
       .from('batches')
-      .select('id, mode')
+      .select('id, mode, class_link')
       .eq('id', batchId)
       .single()
 
@@ -89,6 +89,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Selected batch not found.' }, { status: 400 })
     }
 
+    // Class link is optional for attendance. Prefer submitted link, then existing day link, then batch link.
     let resolvedClassLink = classLink
     if (batch.mode === 'online' && !resolvedClassLink) {
       const { data: existingLink } = await supabaseAdmin
@@ -100,11 +101,8 @@ export async function POST(request: Request) {
         .limit(1)
         .maybeSingle()
 
-      resolvedClassLink = String(existingLink?.class_link || '').trim()
-    }
-
-    if (batch.mode === 'online' && !resolvedClassLink) {
-      return NextResponse.json({ error: 'Online batches require a class link when marking attendance.' }, { status: 400 })
+      resolvedClassLink =
+        String(existingLink?.class_link || '').trim() || String(batch.class_link || '').trim()
     }
 
     const canMark = await callerCanMarkBatch(caller.id, batchId)
@@ -121,7 +119,7 @@ export async function POST(request: Request) {
         attendance_date: attendanceDate,
         status: mark.status,
         notes: mark.note?.trim() || null,
-        class_link: batch.mode === 'online' ? resolvedClassLink : null,
+        class_link: batch.mode === 'online' ? resolvedClassLink || null : null,
         marked_by: caller.id,
         updated_at: new Date().toISOString(),
       }))

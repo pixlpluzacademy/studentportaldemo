@@ -934,11 +934,20 @@ export default function Page() {
                           </p>
 
                           {batch.batch_mode === 'online' && (
-                            <p className="sm:col-span-2 xl:col-span-4">
+                            <p className="min-w-0 sm:col-span-2 xl:col-span-4">
                               <span className="text-muted-foreground">Online Link:</span>{' '}
-                              <span className="font-medium">
-                                {batch.class_link ? 'Link added' : 'Not added yet'}
-                              </span>
+                              {batch.class_link ? (
+                                <a
+                                  href={batch.class_link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="break-all font-medium text-[#153e90] underline-offset-2 hover:underline dark:text-[#6ee75a]"
+                                >
+                                  {batch.class_link}
+                                </a>
+                              ) : (
+                                <span className="font-medium">Not added yet</span>
+                              )}
                             </p>
                           )}
                         </div>

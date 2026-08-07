@@ -140,7 +140,6 @@ export default function Page() {
   const [editingAttendanceDate, setEditingAttendanceDate] = useState('')
   const [editAttendanceStatus, setEditAttendanceStatus] = useState<AttendanceMark>('present')
   const [editAttendanceNote, setEditAttendanceNote] = useState('')
-  const [editAttendanceClassLink, setEditAttendanceClassLink] = useState('')
   const [savingAttendance, setSavingAttendance] = useState(false)
   const [attendanceEditError, setAttendanceEditError] = useState('')
   const [attendanceMessage, setAttendanceMessage] = useState('')
@@ -480,7 +479,6 @@ export default function Page() {
         : 'present',
     )
     setEditAttendanceNote(record?.note || '')
-    setEditAttendanceClassLink(record?.classLink || '')
     setAttendanceEditError('')
     setAttendanceMessage('')
     setIsAttendanceEditOpen(true)
@@ -515,7 +513,6 @@ export default function Page() {
       {
         batchId: student.batch_id,
         attendanceDate: editingAttendanceDate,
-        classLink: editAttendanceClassLink.trim() || undefined,
         marks: [
           {
             studentId: student.id,
@@ -1294,16 +1291,6 @@ export default function Page() {
                   rows={3}
                   className="w-full border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                   placeholder="Optional note"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-medium">Class link (online batches)</label>
-                <input
-                  value={editAttendanceClassLink}
-                  onChange={(event) => setEditAttendanceClassLink(event.target.value)}
-                  className={inputClass}
-                  placeholder="Required only for online batches if not already set"
                 />
               </div>
 
