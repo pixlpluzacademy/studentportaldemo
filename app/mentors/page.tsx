@@ -270,9 +270,19 @@ export default function Page() {
         (mentor) =>
           mentor.permission_profile_slug === MENTOR_HOD_SLUG && mentor.id !== editingId,
       )
-      .map((mentor) => ({ id: mentor.id, name: mentor.full_name }))
+      .map((mentor) => ({
+        id: mentor.id,
+        name: mentor.full_name,
+        department_id: mentor.department_id,
+      }))
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [mentors, editingId])
+
+  // Create/edit form: only HODs from the selected department.
+  const formHodOptions = useMemo(() => {
+    if (!form.department_id) return []
+    return hodOptions.filter((hod) => hod.department_id === form.department_id)
+  }, [form.department_id, hodOptions])
 
   const filteredMentors = useMemo(() => {
     const keyword = search.trim().toLowerCase()
@@ -923,7 +933,18 @@ export default function Page() {
                   <label className="mb-2 block text-sm font-medium">Department</label>
                   <select
                     value={form.department_id}
-                    onChange={(event) => setForm({ ...form, department_id: event.target.value })}
+                    onChange={(event) => {
+                      const nextDepartmentId = event.target.value
+                      const currentHodStillValid = hodOptions.some(
+                        (hod) =>
+                          hod.id === form.reports_to && hod.department_id === nextDepartmentId,
+                      )
+                      setForm({
+                        ...form,
+                        department_id: nextDepartmentId,
+                        reports_to: currentHodStillValid ? form.reports_to : null,
+                      })
+                    }}
                     className={selectClass}
                     required
                   >
@@ -950,9 +971,11 @@ export default function Page() {
                       disabled={isHodView && !editingId}
                     >
                       <option value="" className={optionClass}>
-                        Not assigned
+                        {formHodOptions.length
+                          ? 'Not assigned'
+                          : 'No HOD in this department'}
                       </option>
-                      {hodOptions.map((item) => (
+                      {formHodOptions.map((item) => (
                         <option key={item.id} value={item.id} className={optionClass}>
                           {item.name}
                         </option>

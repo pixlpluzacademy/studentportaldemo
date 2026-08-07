@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { useTheme } from 'next-themes'
@@ -18,7 +18,7 @@ import { MENTOR_HOD_SLUG, MENTOR_FINAL_QA_SLUG } from '@/lib/data/mentors'
 import { createClient } from '@/lib/supabase/client'
 
 type BatchMode = 'online' | 'offline'
-type BatchStatus = 'active' | 'inactive' | 'completed'
+type BatchStatus = 'active' | 'inactive'
 type ClassDayType = 'weekdays' | 'weekend' | 'custom'
 
 async function getAccessToken() {
@@ -212,8 +212,13 @@ export default function Page() {
   const hasManagementBatchAccess = canManageBatches
 
   const hodOptions = useMemo(
-    () => mentors.filter((mentor) => mentor.permission_profile_slug === MENTOR_HOD_SLUG),
-    [mentors],
+    () =>
+      mentors.filter(
+        (mentor) =>
+          mentor.permission_profile_slug === MENTOR_HOD_SLUG &&
+          (!departmentId || mentor.department_id === departmentId),
+      ),
+    [departmentId, mentors],
   )
 
   const trainerOptions = useMemo(
@@ -221,10 +226,23 @@ export default function Page() {
       mentors.filter(
         (mentor) =>
           mentor.permission_profile_slug !== MENTOR_HOD_SLUG &&
-          mentor.permission_profile_slug !== MENTOR_FINAL_QA_SLUG,
+          mentor.permission_profile_slug !== MENTOR_FINAL_QA_SLUG &&
+          (!departmentId || mentor.department_id === departmentId),
       ),
-    [mentors],
+    [departmentId, mentors],
   )
+
+  useEffect(() => {
+    if (academicLeadId && !hodOptions.some((staff) => staff.id === academicLeadId)) {
+      setAcademicLeadId('')
+    }
+  }, [academicLeadId, hodOptions])
+
+  useEffect(() => {
+    if (supportMentorId && !trainerOptions.some((staff) => staff.id === supportMentorId)) {
+      setSupportMentorId('')
+    }
+  }, [supportMentorId, trainerOptions])
 
   const staffFilterOptions = useMemo(
     () =>
@@ -274,9 +292,6 @@ export default function Page() {
     return batches.filter((batch) => {
       if (!canCurrentUserSeeBatch(batch)) return false
 
-      const enrolledCount = batch.enrolled_count || 0
-      const maxSeatCount = batch.max_seats || 0
-      const derivedStatus = maxSeatCount > 0 && enrolledCount >= maxSeatCount ? 'completed' : batch.status
       const batchYear = getYearFromDate(batch.start_date)
       const batchMonth = getMonthFromDate(batch.start_date)
       const durationValue = batch.duration_months ? String(batch.duration_months) : ''
@@ -290,7 +305,7 @@ export default function Page() {
         matchesStaff &&
         (filterYear === 'all' || batchYear === filterYear) &&
         (filterMonth === 'all' || batchMonth === filterMonth) &&
-        (filterStatus === 'all' || derivedStatus === filterStatus) &&
+        (filterStatus === 'all' || batch.status === filterStatus) &&
         (filterStartTime === 'all' || batch.batch_start_time === filterStartTime) &&
         (filterDuration === 'all' || durationValue === filterDuration)
       )
@@ -338,14 +353,11 @@ export default function Page() {
     ).sort((a, b) => Number(a) - Number(b))
   }, [batches])
 
-  const activeCount = filteredBatches.filter((batch) => batch.status === 'active').length
+  const activeCount = filteredBatches.filter(
+    (batch) => batch.status === 'active' || batch.status === 'full',
+  ).length
   const inactiveCount = filteredBatches.filter((batch) => batch.status === 'inactive').length
-  const completedCount = filteredBatches.filter((batch) => {
-    const enrolled = batch.enrolled_count || 0
-    const max = batch.max_seats || 0
-
-    return batch.status === 'completed' || (max > 0 && enrolled >= max)
-  }).length
+  const completedCount = filteredBatches.filter((batch) => batch.status === 'completed').length
 
   const resetFilters = () => {
     setFilterCourseType('all')
@@ -362,20 +374,32 @@ export default function Page() {
   const resetForm = () => {
     const defaultType: CourseType = 'professional'
     const defaultDepartment = departments[0]
+    const defaultDeptId = defaultDepartment?.id || ''
     const firstCourse = courses.find(
       (course) =>
         course.course_type === defaultType &&
-        (!defaultDepartment || course.department_id === defaultDepartment.id),
+        (!defaultDeptId || course.department_id === defaultDeptId),
+    )
+    const defaultHod = mentors.find(
+      (mentor) =>
+        mentor.permission_profile_slug === MENTOR_HOD_SLUG &&
+        (!defaultDeptId || mentor.department_id === defaultDeptId),
+    )
+    const defaultTrainer = mentors.find(
+      (mentor) =>
+        mentor.permission_profile_slug !== MENTOR_HOD_SLUG &&
+        mentor.permission_profile_slug !== MENTOR_FINAL_QA_SLUG &&
+        (!defaultDeptId || mentor.department_id === defaultDeptId),
     )
 
     setCourseType(defaultType)
-    setDepartmentId(defaultDepartment?.id || '')
+    setDepartmentId(defaultDeptId)
     setName(firstCourse ? `${firstCourse.name} Batch` : '')
     setDescription('')
     setCourseId(firstCourse?.id || '')
-    setAcademicLeadId(hodOptions[0]?.id || '')
+    setAcademicLeadId(defaultHod?.id || '')
     setAcademicLeadTitle('HOD')
-    setSupportMentorId(trainerOptions[0]?.id || '')
+    setSupportMentorId(defaultTrainer?.id || '')
     setSupportMentorTitle('Trainer')
     setDurationMonths(String(getDurationFromCourseType(defaultType)))
     setStartDate('')
@@ -420,7 +444,8 @@ export default function Page() {
     setBatchEndTime(batch.batch_end_time || '09:00')
     setMaxSeats(String(batch.max_seats || 20))
     setClassLink(batch.class_link || '')
-    setStatus(batch.status === 'completed' ? 'completed' : batch.status === 'inactive' ? 'inactive' : 'active')
+    // completed/full are auto display states — form only toggles active vs cancelled.
+    setStatus(batch.status === 'inactive' ? 'inactive' : 'active')
     setMessage('')
     setError('')
     setIsModalOpen(true)
@@ -779,8 +804,9 @@ export default function Page() {
             <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className={selectClass}>
               <option value="all" className={optionClass}>All Status</option>
               <option value="active" className={optionClass}>Active</option>
-              <option value="inactive" className={optionClass}>Inactive</option>
-              <option value="completed" className={optionClass}>Completed / Full</option>
+              <option value="full" className={optionClass}>Full</option>
+              <option value="completed" className={optionClass}>Completed (end date passed)</option>
+              <option value="inactive" className={optionClass}>Inactive (Cancelled)</option>
             </select>
 
             <select value={filterStartTime} onChange={(e) => setFilterStartTime(e.target.value)} className={selectClass}>
@@ -815,8 +841,7 @@ export default function Page() {
               {filteredBatches.map((batch) => {
                 const enrolledCount = batch.enrolled_count || 0
                 const maxSeatCount = batch.max_seats || 0
-                const isFull = maxSeatCount > 0 && enrolledCount >= maxSeatCount
-                const displayStatus = isFull ? 'completed' : batch.status
+                const displayStatus = batch.status
 
                 return (
                   <div key={batch.id} className="border border-border bg-transparent p-5">
@@ -839,9 +864,11 @@ export default function Page() {
                             className={
                               displayStatus === 'active'
                                 ? 'border border-[#153e90]/30 bg-[#153e90]/10 px-2 py-1 text-xs font-medium text-[#153e90] dark:border-[#6ee75a]/30 dark:bg-[#6ee75a]/10 dark:text-white'
-                                : displayStatus === 'completed'
+                                : displayStatus === 'full'
                                   ? 'border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-300'
-                                  : 'border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-400'
+                                  : displayStatus === 'completed'
+                                    ? 'border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300'
+                                    : 'border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs font-medium text-red-400'
                             }
                           >
                             {displayStatus}
@@ -1007,7 +1034,13 @@ export default function Page() {
                 <div>
                   <label className="mb-2 block text-sm font-medium">HOD</label>
                   <select value={academicLeadId} onChange={(e) => setAcademicLeadId(e.target.value)} className={selectClass} required>
-                    <option value="" className={optionClass}>Select HOD</option>
+                    <option value="" className={optionClass}>
+                      {departmentId
+                        ? hodOptions.length
+                          ? 'Select HOD'
+                          : 'No HOD in this department'
+                        : 'Select department first'}
+                    </option>
                     {hodOptions.map((staff) => (
                       <option key={staff.id} value={staff.id} className={optionClass}>
                         {staff.full_name}
@@ -1016,12 +1049,16 @@ export default function Page() {
                   </select>
                 </div>
 
-    
-
                 <div>
                   <label className="mb-2 block text-sm font-medium">Trainer</label>
                   <select value={supportMentorId} onChange={(e) => setSupportMentorId(e.target.value)} className={selectClass} required>
-                    <option value="" className={optionClass}>Select trainer</option>
+                    <option value="" className={optionClass}>
+                      {departmentId
+                        ? trainerOptions.length
+                          ? 'Select trainer'
+                          : 'No trainer in this department'
+                        : 'Select department first'}
+                    </option>
                     {trainerOptions.map((staff) => (
                       <option key={staff.id} value={staff.id} className={optionClass}>
                         {staff.full_name}
@@ -1078,9 +1115,12 @@ export default function Page() {
                   <label className="mb-2 block text-sm font-medium">Status</label>
                   <select value={status} onChange={(e) => setStatus(e.target.value as BatchStatus)} className={selectClass}>
                     <option value="active" className={optionClass}>Active</option>
-                    <option value="inactive" className={optionClass}>Inactive</option>
-                    <option value="completed" className={optionClass}>Completed</option>
+                    <option value="inactive" className={optionClass}>Inactive (Cancelled)</option>
                   </select>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Active keeps student access. Inactive cancels the batch and blocks notes/tasks.
+                    Full and Completed badges appear automatically from seats and end date.
+                  </p>
                 </div>
 
                 <div className="md:col-span-2">

@@ -8,7 +8,7 @@ import {
 import type { CourseType } from '@/lib/data/courses'
 import { createClient } from '@/lib/supabase/client'
 
-export type BatchUiStatus = 'active' | 'inactive' | 'completed'
+export type BatchUiStatus = 'active' | 'inactive' | 'full' | 'completed'
 export type ClassDayType = 'weekdays' | 'weekend' | 'custom'
 export type BatchStaffType = 'hod' | 'mentor' | 'trainer' | 'final_qa'
 
@@ -172,21 +172,43 @@ function formatDate(value: string | null | undefined) {
   return value.slice(0, 10)
 }
 
-function mapDbStatusToUi(status: DbBatchStatus, enrolledCount: number, maxSeats: number): BatchUiStatus {
-  if (status === 'full' || (maxSeats > 0 && enrolledCount >= maxSeats)) {
+function todayDateString() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function mapDbStatusToUi(
+  status: DbBatchStatus,
+  enrolledCount: number,
+  maxSeats: number,
+  endDate: string | null,
+): BatchUiStatus {
+  // Archived = cancelled. Students lose notes/tasks access — always wins.
+  if (status === 'archived' || status === 'upcoming') {
+    return 'inactive'
+  }
+
+  const normalizedEndDate = formatDate(endDate)
+  // End date passed, but batch stays accessible for notes/tasks/placement.
+  if (normalizedEndDate && normalizedEndDate < todayDateString()) {
     return 'completed'
   }
 
-  if (status === 'archived' || status === 'upcoming') {
-    return 'inactive'
+  if (status === 'full' || (maxSeats > 0 && enrolledCount >= maxSeats)) {
+    return 'full'
   }
 
   return 'active'
 }
 
 function mapUiStatusToDb(status: BatchUiStatus): DbBatchStatus {
-  if (status === 'completed') return 'full'
+  // Only inactive (cancelled) is stored as archived.
+  // completed/full are display states — keep DB active so students retain access.
   if (status === 'inactive') return 'archived'
+  if (status === 'full') return 'full'
   return 'active'
 }
 
@@ -257,7 +279,7 @@ function mapDbBatchToListRow(row: DbBatchRow): BatchListRow {
     max_seats: maxSeats,
     enrolled_count: enrolledCount,
     class_link: row.class_link,
-    status: mapDbStatusToUi(row.status, enrolledCount, maxSeats),
+    status: mapDbStatusToUi(row.status, enrolledCount, maxSeats, row.end_date),
     created_at: formatDate(row.created_at) || '',
     staff_assignments: mapStaffAssignments(row.batch_staff_assignments),
   }

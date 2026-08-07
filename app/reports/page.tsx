@@ -38,7 +38,7 @@ import {
   type ReportMentorProfileOption,
   type ReportMarksTaskOption,
   type ReportReviewTaskOption,
-  type ReportPiePoint,
+  type ReportDepartmentBatchStat,
   type ReportsSnapshot,
 } from '@/lib/data/reports'
 
@@ -88,13 +88,70 @@ function ChartCard({
   )
 }
 
-type DepartmentPieMode = 'students' | 'batches'
+type DepartmentPieMode = 'students' | 'batches' | 'avg'
 
-function dataSafePie(data?: ReportPiePoint[] | null): ReportPiePoint[] {
-  if (!data?.length) {
-    return [{ label: 'No data', value: 100, count: 0, color: '#64748b' }]
+type DepartmentPieRow = {
+  name: string
+  students: number
+  batches: number
+  avgStudentsPerBatch: number
+  /** Slice size for the selected metric. */
+  metric: number
+  percent: number
+  fill: string
+}
+
+function buildDepartmentPieRows(
+  stats: ReportDepartmentBatchStat[],
+  departments: { id: string; name: string }[],
+  mode: DepartmentPieMode,
+  filters: { departmentId: string; batchMode: string; status: string },
+): DepartmentPieRow[] {
+  const filtered = stats.filter((row) => {
+    if (filters.departmentId !== 'all' && row.departmentId !== filters.departmentId) return false
+    if (filters.batchMode !== 'all' && row.batchMode !== filters.batchMode) return false
+    if (filters.status !== 'all' && row.status !== filters.status) return false
+    return true
+  })
+
+  const byDepartment = new Map<string, { students: number; batches: number }>()
+
+  for (const department of departments) {
+    if (filters.departmentId !== 'all' && department.id !== filters.departmentId) continue
+    byDepartment.set(department.name, { students: 0, batches: 0 })
   }
-  return data
+
+  for (const row of filtered) {
+    const key = row.departmentName || '—'
+    const current = byDepartment.get(key) || { students: 0, batches: 0 }
+    current.students += row.studentCount
+    current.batches += 1
+    byDepartment.set(key, current)
+  }
+
+  const rows = Array.from(byDepartment.entries())
+    .map(([name, item]) => {
+      const avgStudentsPerBatch =
+        item.batches > 0 ? Math.round((item.students / item.batches) * 10) / 10 : 0
+      const metric =
+        mode === 'batches' ? item.batches : mode === 'avg' ? avgStudentsPerBatch : item.students
+      return {
+        name,
+        students: item.students,
+        batches: item.batches,
+        avgStudentsPerBatch,
+        metric,
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  const totalMetric = rows.reduce((sum, row) => sum + row.metric, 0)
+
+  return rows.map((row, index) => ({
+    ...row,
+    percent: totalMetric > 0 ? Math.round((row.metric / totalMetric) * 100) : 0,
+    fill: PIE_COLORS[index % PIE_COLORS.length],
+  }))
 }
 
 function ModernBarGraph({
@@ -627,112 +684,120 @@ function MarksBarChart({
   )
 }
 
-function ClassicPieChart({ data }: { data: ReportPiePoint[] }) {
-  const allDepartments = data.map((item, index) => ({
-    name: item.label,
-    count: typeof item.count === 'number' ? item.count : item.value,
-    percent: item.value,
-    fill: item.color || PIE_COLORS[index % PIE_COLORS.length],
-  }))
+function ClassicPieChart({
+  rows,
+  mode,
+}: {
+  rows: DepartmentPieRow[]
+  mode: DepartmentPieMode
+}) {
+  const metricLabel =
+    mode === 'batches' ? 'Batches' : mode === 'avg' ? 'Avg students / batch' : 'Students'
 
-  // Zero-count departments stay in the legend; only positive counts become pie slices.
-  const sliceData = allDepartments
-    .filter((item) => item.count > 0 && item.name !== 'No data')
+  const sliceData = rows
+    .filter((item) => item.metric > 0)
     .map((item) => ({
       name: item.name,
-      value: item.count,
+      value: item.metric,
       percent: item.percent,
+      students: item.students,
+      batches: item.batches,
+      avgStudentsPerBatch: item.avgStudentsPerBatch,
       fill: item.fill,
     }))
 
   const sliceCount = sliceData.length
   const paddingAngle = sliceCount > 1 ? 2 : 0
-  const emptyCount = allDepartments.filter((item) => item.count === 0 && item.name !== 'No data').length
-  const emptyPie = [{ name: 'No data', value: 1, percent: 0, fill: '#64748b' }]
-  const pieData = sliceCount > 0 ? sliceData : emptyPie
+  const emptyCount = rows.filter((item) => item.metric === 0).length
+  const pieData =
+    sliceCount > 0
+      ? sliceData
+      : [
+          {
+            name: 'No data',
+            value: 1,
+            percent: 0,
+            students: 0,
+            batches: 0,
+            avgStudentsPerBatch: 0,
+            fill: '#64748b',
+          },
+        ]
 
   return (
     <div className="border border-border bg-background/40 p-4">
-      <div className="grid gap-4 md:grid-cols-[1.2fr_1fr] md:items-center">
-        <div className="min-w-0">
-          <div className="h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={110}
-                  paddingAngle={paddingAngle}
-                  isAnimationActive={false}
-                  stroke="none"
-                  labelLine={sliceCount > 1}
-                  label={
-                    sliceCount > 1
-                      ? ({ name, percent, cx: labelCx, cy: labelCy, midAngle, outerRadius: or }) => {
-                          if (!name || percent < 0.04) return null
-                          const RADIAN = Math.PI / 180
-                          const radius = (or as number) + 22
-                          const x = (labelCx as number) + radius * Math.cos(-midAngle * RADIAN)
-                          const y = (labelCy as number) + radius * Math.sin(-midAngle * RADIAN)
-                          return (
-                            <text
-                              x={x}
-                              y={y}
-                              fill="currentColor"
-                              textAnchor={x > (labelCx as number) ? 'start' : 'end'}
-                              dominantBaseline="central"
-                              className="text-[11px] font-semibold fill-foreground"
-                            >
-                              {`${name} ${Math.round(percent * 100)}%`}
-                            </text>
-                          )
-                        }
-                      : false
-                  }
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`${entry.name}-${index}`} fill={entry.fill} stroke="none" />
-                  ))}
-                </Pie>
-                <Tooltip
-                  formatter={(value: number, _name, item) => {
-                    const percent = item?.payload?.percent
-                    return [`${value}${typeof percent === 'number' ? ` (${percent}%)` : ''}`, 'Count']
-                  }}
-                  contentStyle={{
-                    background: 'var(--card)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 0,
-                    fontSize: 12,
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          {sliceCount <= 1 && emptyCount > 0 && (
-            <p className="mt-2 text-center text-xs text-muted-foreground">
-              Only {sliceCount === 1 ? '1 department has' : 'no department has'} data, so the pie is one
-              full slice. Empty departments stay in the list ({emptyCount}).
-            </p>
-          )}
+      <div className="flex flex-col items-center gap-5">
+        <div className="mx-auto h-72 w-full max-w-md">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={pieData}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                innerRadius={48}
+                outerRadius={100}
+                paddingAngle={paddingAngle}
+                isAnimationActive={false}
+                stroke="none"
+                labelLine={false}
+                label={false}
+              >
+                {pieData.map((entry, index) => (
+                  <Cell key={`${entry.name}-${index}`} fill={entry.fill} stroke="none" />
+                ))}
+              </Pie>
+              <Tooltip
+                formatter={(value: number, _name, item) => {
+                  const payload = item?.payload
+                  return [
+                    `${value}${typeof payload?.percent === 'number' ? ` (${payload.percent}%)` : ''}`,
+                    metricLabel,
+                  ]
+                }}
+                contentStyle={{
+                  background: 'var(--card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 0,
+                  fontSize: 12,
+                }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
         </div>
 
-        <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-          {allDepartments.map((item, index) => (
+        {sliceCount <= 1 && emptyCount > 0 && (
+          <p className="text-center text-xs text-muted-foreground">
+            Only {sliceCount === 1 ? '1 department has' : 'no department has'} matching data. Empty
+            departments stay in the list ({emptyCount}).
+          </p>
+        )}
+
+        <div className="grid w-full gap-2 sm:grid-cols-2">
+          {rows.map((item, index) => (
             <div
               key={`${item.name}-${index}`}
-              className="flex items-center justify-between gap-3 border border-border bg-card px-3 py-2 text-sm"
+              className="border border-border bg-card px-3 py-2.5 text-sm"
             >
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex items-center gap-2">
                 <span className="h-2.5 w-2.5 shrink-0" style={{ background: item.fill }} />
                 <span className="truncate font-semibold">{item.name}</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">{item.percent}%</span>
               </div>
-              <span className="shrink-0 text-muted-foreground">
-                {item.count} · {item.percent}%
-              </span>
+              <div className="mt-1.5 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
+                <span>
+                  <span className="font-semibold text-foreground">{item.students}</span> students
+                </span>
+                <span>
+                  <span className="font-semibold text-foreground">{item.batches}</span> batches
+                </span>
+                <span>
+                  avg{' '}
+                  <span className="font-semibold text-foreground">{item.avgStudentsPerBatch}</span>
+                  /batch
+                </span>
+              </div>
             </div>
           ))}
         </div>
@@ -749,6 +814,9 @@ export default function Page() {
   const [loading, setLoading] = useState(true)
   const [snapshot, setSnapshot] = useState<ReportsSnapshot | null>(null)
   const [departmentPieMode, setDepartmentPieMode] = useState<DepartmentPieMode>('students')
+  const [departmentPieDepartmentId, setDepartmentPieDepartmentId] = useState('all')
+  const [departmentPieBatchMode, setDepartmentPieBatchMode] = useState<'all' | 'online' | 'offline'>('all')
+  const [departmentPieStatus, setDepartmentPieStatus] = useState('all')
   const [trendRange, setTrendRange] = useState<AttendanceTrendRange>('weekly')
   const [trendFromDate, setTrendFromDate] = useState(() => getAttendanceTrendPresetDates('weekly').fromDate)
   const [trendToDate, setTrendToDate] = useState(() => getAttendanceTrendPresetDates('weekly').toDate)
@@ -1235,10 +1303,27 @@ export default function Page() {
     setTrendBatchIds((current) => current.filter((id) => id !== batchId))
   }
 
-  const departmentPieData =
-    departmentPieMode === 'students'
-      ? dataSafePie(snapshot?.studentsByDepartment)
-      : dataSafePie(snapshot?.batchesByDepartment)
+  const departmentPieRows = useMemo(
+    () =>
+      buildDepartmentPieRows(
+        snapshot?.departmentBatchStats || [],
+        snapshot?.departments || [],
+        departmentPieMode,
+        {
+          departmentId: departmentPieDepartmentId,
+          batchMode: departmentPieBatchMode,
+          status: departmentPieStatus,
+        },
+      ),
+    [
+      snapshot?.departmentBatchStats,
+      snapshot?.departments,
+      departmentPieMode,
+      departmentPieDepartmentId,
+      departmentPieBatchMode,
+      departmentPieStatus,
+    ],
+  )
 
   if (!canViewReports) {
     return (
@@ -1461,25 +1546,99 @@ export default function Page() {
         {canSeeAcademic && (
           <ChartCard
             title="Department Distribution"
-            subtitle="Share of students or batches in each department."
-            action={
-              <select
-                value={departmentPieMode}
-                onChange={(e) => setDepartmentPieMode(e.target.value as DepartmentPieMode)}
-                className="h-9 border border-border bg-background px-3 text-sm"
-                aria-label="Department pie chart filter"
-              >
-                <option value="students">Students in each department</option>
-                <option value="batches">Batches in each department</option>
-              </select>
-            }
+            subtitle="Students and batches per department. % is share of the selected metric. Avg = students ÷ batches."
           >
+            <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <label className="space-y-1.5 text-sm">
+                <span className="font-semibold text-muted-foreground">Metric</span>
+                <select
+                  value={departmentPieMode}
+                  onChange={(e) => setDepartmentPieMode(e.target.value as DepartmentPieMode)}
+                  className={selectClass}
+                  aria-label="Department pie metric"
+                >
+                  <option value="students" className={optionClass}>
+                    Students in each department
+                  </option>
+                  <option value="batches" className={optionClass}>
+                    Batches in each department
+                  </option>
+                  <option value="avg" className={optionClass}>
+                    Avg students per batch
+                  </option>
+                </select>
+              </label>
+              <label className="space-y-1.5 text-sm">
+                <span className="font-semibold text-muted-foreground">Department</span>
+                <select
+                  value={departmentPieDepartmentId}
+                  onChange={(e) => setDepartmentPieDepartmentId(e.target.value)}
+                  className={selectClass}
+                  aria-label="Filter department pie by department"
+                >
+                  <option value="all" className={optionClass}>
+                    All departments
+                  </option>
+                  {departmentOptions.map((department) => (
+                    <option key={department.id} value={department.id} className={optionClass}>
+                      {department.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1.5 text-sm">
+                <span className="font-semibold text-muted-foreground">Mode</span>
+                <select
+                  value={departmentPieBatchMode}
+                  onChange={(e) =>
+                    setDepartmentPieBatchMode(e.target.value as 'all' | 'online' | 'offline')
+                  }
+                  className={selectClass}
+                  aria-label="Filter department pie by batch mode"
+                >
+                  <option value="all" className={optionClass}>
+                    All modes
+                  </option>
+                  <option value="online" className={optionClass}>
+                    Online
+                  </option>
+                  <option value="offline" className={optionClass}>
+                    Onsite
+                  </option>
+                </select>
+              </label>
+              <label className="space-y-1.5 text-sm">
+                <span className="font-semibold text-muted-foreground">Batch status</span>
+                <select
+                  value={departmentPieStatus}
+                  onChange={(e) => setDepartmentPieStatus(e.target.value)}
+                  className={selectClass}
+                  aria-label="Filter department pie by batch status"
+                >
+                  <option value="all" className={optionClass}>
+                    All statuses
+                  </option>
+                  <option value="active" className={optionClass}>
+                    Active
+                  </option>
+                  <option value="full" className={optionClass}>
+                    Full
+                  </option>
+                  <option value="completed" className={optionClass}>
+                    Completed
+                  </option>
+                  <option value="inactive" className={optionClass}>
+                    Inactive (Cancelled)
+                  </option>
+                </select>
+              </label>
+            </div>
             {loading || !data ? (
               <div className="flex h-72 items-center justify-center border border-border text-sm text-muted-foreground">
                 Loading chart…
               </div>
             ) : (
-              <ClassicPieChart data={departmentPieData} />
+              <ClassicPieChart rows={departmentPieRows} mode={departmentPieMode} />
             )}
           </ChartCard>
         )}

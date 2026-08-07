@@ -409,7 +409,7 @@ export default function ViewBatchPage() {
   }
 
   const batchModeLabel = batch.batch_mode === 'online' ? 'Online' : 'Onsite'
-  const statusLabel = isBatchFull ? 'Full' : batch.status
+  const statusLabel = batch.status
 
   return (
     <div className="space-y-6">
@@ -447,9 +447,13 @@ export default function ViewBatchPage() {
 
                 <span
                   className={
-                    isBatchFull || batch.status === 'completed'
-                      ? 'border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-medium text-red-400'
-                      : 'border border-[#6ee75a]/30 bg-[#6ee75a]/10 px-3 py-1 text-sm font-medium text-[#6ee75a]'
+                    statusLabel === 'active'
+                      ? 'border border-[#6ee75a]/30 bg-[#6ee75a]/10 px-3 py-1 text-sm font-medium text-[#6ee75a]'
+                      : statusLabel === 'full'
+                        ? 'border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-sm font-medium text-amber-600 dark:text-amber-300'
+                        : statusLabel === 'completed'
+                          ? 'border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-700 dark:text-emerald-300'
+                          : 'border border-red-500/30 bg-red-500/10 px-3 py-1 text-sm font-medium text-red-400'
                   }
                 >
                   {statusLabel}

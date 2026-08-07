@@ -207,7 +207,8 @@ function formatTimeRange(start: string | null, end: string | null) {
 }
 
 function mapBatchStatusLabel(status: BatchListRow['status']) {
-  if (status === 'completed') return 'Full'
+  if (status === 'full') return 'Full'
+  if (status === 'completed') return 'Completed'
   if (status === 'inactive') return 'Inactive'
   return 'Active'
 }

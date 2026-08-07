@@ -42,6 +42,20 @@ export type ReportPiePoint = {
   value: number
   count?: number
   color?: string
+  students?: number
+  batches?: number
+  avgStudentsPerBatch?: number
+}
+
+/** One batch row for client-side department pie filters/aggregation. */
+export type ReportDepartmentBatchStat = {
+  departmentId: string | null
+  departmentName: string
+  batchId: string
+  batchName: string
+  batchMode: 'online' | 'offline'
+  status: string
+  studentCount: number
 }
 
 export type ReportFilterOption = {
@@ -137,6 +151,8 @@ export type ReportsSnapshot = {
   departmentBreakdown: ReportGraphPoint[]
   studentsByDepartment: ReportPiePoint[]
   batchesByDepartment: ReportPiePoint[]
+  /** Per-batch rows so the department pie can filter by mode/status client-side. */
+  departmentBatchStats: ReportDepartmentBatchStat[]
   departments: ReportFilterOption[]
   batches: ReportFilterOption[]
   /** Full branch-scoped batch list for searchable attendance pickers. */
@@ -170,6 +186,7 @@ function emptySnapshot(): ReportsSnapshot {
     departmentBreakdown: [],
     studentsByDepartment: [],
     batchesByDepartment: [],
+    departmentBatchStats: [],
     departments: [],
     batches: [],
     batchCatalog: [],
@@ -493,6 +510,19 @@ export async function fetchReportsSnapshot(options: {
         .sort((a, b) => a.label.localeCompare(b.label)),
     )
 
+    const departmentBatchStats: ReportDepartmentBatchStat[] = scopedBatches.map((batch) => {
+      const studentCount = students.filter((student) => student.batch_id === batch.id).length
+      return {
+        departmentId: batch.department_id,
+        departmentName: batch.department_name || '—',
+        batchId: batch.id,
+        batchName: batch.name,
+        batchMode: batch.batch_mode,
+        status: batch.status,
+        studentCount,
+      }
+    })
+
     const pendingMentor = stats.pendingMentorReviewCount
     const pendingHod = stats.pendingHodReviewCount
     const pendingQa = stats.pendingQaCount
@@ -595,6 +625,7 @@ export async function fetchReportsSnapshot(options: {
         batchesByDepartment: batchesByDepartment.length
           ? batchesByDepartment
           : [{ label: 'No data (0)', value: 100, color: '#64748b' }],
+        departmentBatchStats,
         departments,
         batches: filterBatchOptions,
         batchCatalog,
