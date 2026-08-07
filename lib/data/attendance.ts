@@ -237,12 +237,23 @@ export function mapBatchListRowToAttendanceBatch(batch: BatchListRow): Attendanc
   }
 }
 
+/** Day weight: present = full day, late = half day, absent = none. */
+export function attendanceStatusWeight(status: AttendanceMark): number {
+  if (status === 'present') return 1
+  if (status === 'late') return 0.5
+  return 0
+}
+
+/** Weighted attendance % (present=1, late=0.5, absent=0). Used for student %, batch averages, and list labels. */
 export function computeAttendancePercent(records: Pick<DailyAttendanceRecord, 'status'>[]): number {
   const marked = records.filter((record) => record.status !== 'unmarked')
   if (!marked.length) return 0
 
-  const present = marked.filter((record) => record.status === 'present').length
-  return Math.round((present / marked.length) * 100)
+  const score = marked.reduce(
+    (total, record) => total + attendanceStatusWeight(record.status),
+    0,
+  )
+  return Math.round((score / marked.length) * 100)
 }
 
 export function formatAttendanceAverageLabel(percent: number, hasRecords: boolean) {
@@ -370,15 +381,13 @@ export async function fetchBatchAttendanceAverages(
 
   batchIds.forEach((batchId) => {
     const statuses = grouped.get(batchId) || []
-    const marked = statuses.filter((status) => status !== 'unmarked')
-    const averagePercent = marked.length
-      ? Math.round((marked.filter((status) => status === 'present').length / marked.length) * 100)
-      : 0
+    const averagePercent = computeAttendancePercent(statuses.map((status) => ({ status })))
+    const hasRecords = statuses.some((status) => status !== 'unmarked')
 
     result.set(batchId, {
       batchId,
-      averageLabel: formatAttendanceAverageLabel(averagePercent, marked.length > 0),
-      averagePercent,
+      averageLabel: formatAttendanceAverageLabel(averagePercent, hasRecords),
+      averagePercent: hasRecords ? averagePercent : 0,
     })
   })
 
@@ -422,11 +431,9 @@ export async function fetchEnrollmentAttendanceLabels(
   }
 
   grouped.forEach((statuses, key) => {
-    const marked = statuses.filter((status) => status !== 'unmarked')
-    const percent = marked.length
-      ? Math.round((marked.filter((status) => status === 'present').length / marked.length) * 100)
-      : 0
-    labels.set(key, formatAttendanceAverageLabel(percent, marked.length > 0))
+    const hasRecords = statuses.some((status) => status !== 'unmarked')
+    const percent = computeAttendancePercent(statuses.map((status) => ({ status })))
+    labels.set(key, formatAttendanceAverageLabel(percent, hasRecords))
   })
 
   return labels

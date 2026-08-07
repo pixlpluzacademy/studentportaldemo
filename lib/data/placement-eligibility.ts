@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { AttendanceMark } from '@/lib/data/attendance'
+import { computeAttendancePercent, type AttendanceMark } from '@/lib/data/attendance'
 import { getMarkGrade } from '@/lib/data/marks'
 import { getAssignmentMaxMarks } from '@/lib/data/tasks'
 import { createClient } from '@/lib/supabase/client'
@@ -40,7 +40,7 @@ function average(scores: number[]) {
   return Math.round(scores.reduce((total, score) => total + score, 0) / scores.length)
 }
 
-/** Present + late count as attended (same idea as student attendance eligibility UI). */
+/** Same weighted rule as student attendance: present=1, late=0.5, absent=0. */
 export function computePlacementAttendancePercent(statuses: AttendanceMark[]): {
   percent: number | null
   hasRecords: boolean
@@ -50,9 +50,8 @@ export function computePlacementAttendancePercent(statuses: AttendanceMark[]): {
     return { percent: null, hasRecords: false }
   }
 
-  const attended = marked.filter((status) => status === 'present' || status === 'late').length
   return {
-    percent: Math.round((attended / marked.length) * 100),
+    percent: computeAttendancePercent(marked.map((status) => ({ status }))),
     hasRecords: true,
   }
 }
