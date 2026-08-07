@@ -9,6 +9,7 @@ import {
   buildCourseAttendanceSummaries,
   computeAttendancePercent,
   fetchAttendanceRecords,
+  listExpectedClassDays,
   mapBatchListRowToAttendanceBatch,
   type CourseAttendanceSessionSummary,
 } from '@/lib/data/attendance'
@@ -267,8 +268,27 @@ export default function Page() {
       )
       setRelatedSubmissions(filteredSubmissions.map(mapSubmissionRow))
 
-      if (isStudent && attendanceResult.data?.length) {
-        setAverageAttendance(`${computeAttendancePercent(attendanceResult.data)}%`)
+      if (isStudent) {
+        const records = attendanceResult.data || []
+        const percents: number[] = []
+
+        for (const batch of attendanceBatches) {
+          const batchRecords = records.filter((record) => record.batchId === batch.id)
+          const schedule = {
+            startDate: batch.start_date,
+            endDate: batch.end_date,
+            classDayType: batch.class_day_type || 'weekdays',
+            customDays: batch.custom_days,
+          }
+          if (!listExpectedClassDays(schedule).length) continue
+          percents.push(computeAttendancePercent(batchRecords, schedule))
+        }
+
+        setAverageAttendance(
+          percents.length
+            ? `${Math.round(percents.reduce((total, value) => total + value, 0) / percents.length)}%`
+            : '—',
+        )
       } else if (summaries.length) {
         const totalPresent = summaries.reduce((total, item) => total + item.present, 0)
         const totalMarked = summaries.reduce(

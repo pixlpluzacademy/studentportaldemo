@@ -8,6 +8,7 @@ import {
   computeAttendancePercent,
   fetchAttendanceRecords,
   fetchBatchAttendanceAverages,
+  listExpectedClassDays,
 } from '@/lib/data/attendance'
 import { fetchBatchTaskStats, fetchStudentIdByProfileId } from '@/lib/data/tasks'
 import { createClient } from '@/lib/supabase/client'
@@ -287,8 +288,28 @@ export async function fetchDashboardStats(
         studentTaskProgress =
           totalTasks > 0 ? Math.min(100, Math.round((totalSubmissions / totalTasks) * 100)) : 0
 
-        if (studentAttendanceResult.data?.length) {
-          studentAttendancePercent = computeAttendancePercent(studentAttendanceResult.data)
+        if (studentId) {
+          const records = studentAttendanceResult.data || []
+          const percents: number[] = []
+
+          for (const batch of batches) {
+            const batchRecords = records.filter((record) => record.batchId === batch.id)
+            const schedule = {
+              startDate: batch.start_date,
+              endDate: batch.end_date,
+              classDayType: batch.class_day_type || 'weekdays',
+              customDays: batch.custom_days,
+            }
+            const expected = listExpectedClassDays(schedule)
+            if (!expected.length) continue
+            percents.push(computeAttendancePercent(batchRecords, schedule))
+          }
+
+          if (percents.length) {
+            studentAttendancePercent = Math.round(
+              percents.reduce((total, value) => total + value, 0) / percents.length,
+            )
+          }
         }
 
         const { data: studentMarks } = await client

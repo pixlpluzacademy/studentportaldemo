@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { computeAttendancePercent, type AttendanceMark } from '@/lib/data/attendance'
+import {
+  computeAttendancePercent,
+  listExpectedClassDays,
+  type AttendanceMark,
+} from '@/lib/data/attendance'
 import { getMarkGrade } from '@/lib/data/marks'
 import { getAssignmentMaxMarks } from '@/lib/data/tasks'
 import { createClient } from '@/lib/supabase/client'
@@ -40,18 +44,47 @@ function average(scores: number[]) {
   return Math.round(scores.reduce((total, score) => total + score, 0) / scores.length)
 }
 
-/** Same weighted rule as student attendance: present=1, late=0.5, absent=0. */
-export function computePlacementAttendancePercent(statuses: AttendanceMark[]): {
+/** Same schedule + weight rule as student attendance (present=1, late=0.5, absent/missed=0). */
+export function computePlacementAttendancePercent(
+  records: { status: AttendanceMark; date?: string }[],
+  schedule?: {
+    startDate?: string | null
+    endDate?: string | null
+    classDayType?: string | null
+    customDays?: string[]
+  } | null,
+): {
   percent: number | null
   hasRecords: boolean
 } {
-  const marked = statuses.filter((status) => status !== 'unmarked')
+  const expectedDays = schedule
+    ? listExpectedClassDays({
+        startDate: schedule.startDate,
+        endDate: schedule.endDate,
+        classDayType: (schedule.classDayType as 'weekdays' | 'weekend' | 'custom') || 'weekdays',
+        customDays: schedule.customDays,
+      })
+    : []
+
+  if (expectedDays.length > 0) {
+    return {
+      percent: computeAttendancePercent(records, {
+        startDate: schedule?.startDate,
+        endDate: schedule?.endDate,
+        classDayType: (schedule?.classDayType as 'weekdays' | 'weekend' | 'custom') || 'weekdays',
+        customDays: schedule?.customDays,
+      }),
+      hasRecords: true,
+    }
+  }
+
+  const marked = records.filter((record) => record.status !== 'unmarked')
   if (!marked.length) {
     return { percent: null, hasRecords: false }
   }
 
   return {
-    percent: computeAttendancePercent(marked.map((status) => ({ status }))),
+    percent: computeAttendancePercent(marked),
     hasRecords: true,
   }
 }
@@ -224,25 +257,52 @@ export async function fetchStudentPlacementAttendancePercents(
 
   if (!batchIds.length || !studentIds.length) return result
 
-  const { data, error } = await client
-    .from('student_attendance_records')
-    .select('batch_id, student_id, status')
-    .in('batch_id', batchIds)
-    .in('student_id', studentIds)
+  const [{ data: batchRows }, { data, error }] = await Promise.all([
+    client.from('batches').select('id, start_date, end_date, class_day_type').in('id', batchIds),
+    client
+      .from('student_attendance_records')
+      .select('batch_id, student_id, status, attendance_date')
+      .in('batch_id', batchIds)
+      .in('student_id', studentIds),
+  ])
 
-  if (error || !data?.length) return result
+  if (error) return result
 
-  const grouped = new Map<string, AttendanceMark[]>()
+  const schedules = new Map<
+    string,
+    { start_date: string | null; end_date: string | null; class_day_type: string | null }
+  >()
+  for (const row of (batchRows || []) as {
+    id: string
+    start_date: string | null
+    end_date: string | null
+    class_day_type: string | null
+  }[]) {
+    schedules.set(row.id, row)
+  }
 
-  for (const row of data as { batch_id: string; student_id: string; status: AttendanceMark }[]) {
+  const grouped = new Map<string, { status: AttendanceMark; date: string }[]>()
+
+  for (const row of (data || []) as {
+    batch_id: string
+    student_id: string
+    status: AttendanceMark
+    attendance_date: string
+  }[]) {
     const key = `${row.student_id}:${row.batch_id}`
     const list = grouped.get(key) || []
-    list.push(row.status)
+    list.push({ status: row.status, date: row.attendance_date })
     grouped.set(key, list)
   }
 
-  grouped.forEach((statuses, key) => {
-    const { percent } = computePlacementAttendancePercent(statuses)
+  enrollments.forEach((item) => {
+    const key = `${item.studentId}:${item.batchId}`
+    const schedule = schedules.get(item.batchId)
+    const { percent } = computePlacementAttendancePercent(grouped.get(key) || [], {
+      startDate: schedule?.start_date,
+      endDate: schedule?.end_date,
+      classDayType: schedule?.class_day_type,
+    })
     result.set(key, percent)
   })
 

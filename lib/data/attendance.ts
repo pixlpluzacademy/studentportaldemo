@@ -102,6 +102,68 @@ export function isAttendanceClassDay(
   return isScheduledClassDay(dateValue, options.classDayType, options.customDays || [])
 }
 
+function toLocalIsoDate(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export type AttendanceScheduleOptions = {
+  startDate?: string | null
+  endDate?: string | null
+  classDayType: ClassDayType
+  customDays?: string[]
+  /** Inclusive end for expected days. Defaults to today (local). */
+  throughDate?: string | null
+}
+
+/**
+ * Scheduled class days from batch start through min(today, batch end).
+ * Future class days are excluded so they do not drag attendance down early.
+ */
+export function listExpectedClassDays(options: AttendanceScheduleOptions): string[] {
+  const start = options.startDate?.slice(0, 10)
+  if (!start || !/^\d{4}-\d{2}-\d{2}$/.test(start)) return []
+
+  const today = (options.throughDate || toLocalIsoDate(new Date())).slice(0, 10)
+  const batchEnd = options.endDate?.slice(0, 10)
+  const through =
+    batchEnd && /^\d{4}-\d{2}-\d{2}$/.test(batchEnd) && batchEnd < today ? batchEnd : today
+
+  if (through < start) return []
+
+  const days: string[] = []
+  const cursor = new Date(`${start}T00:00:00`)
+  const last = new Date(`${through}T00:00:00`)
+  if (Number.isNaN(cursor.getTime()) || Number.isNaN(last.getTime())) return []
+
+  while (cursor <= last) {
+    const iso = toLocalIsoDate(cursor)
+    if (
+      isAttendanceClassDay(iso, {
+        startDate: options.startDate,
+        endDate: options.endDate || through,
+        classDayType: options.classDayType,
+        customDays: options.customDays,
+      })
+    ) {
+      days.push(iso)
+    }
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  return days
+}
+
+export type AttendanceScheduleInput = {
+  startDate?: string | null
+  endDate?: string | null
+  classDayType?: ClassDayType | null
+  customDays?: string[]
+  throughDate?: string | null
+}
+
 export type AttendanceStudent = {
   id: string
   name: string
@@ -244,8 +306,43 @@ export function attendanceStatusWeight(status: AttendanceMark): number {
   return 0
 }
 
-/** Weighted attendance % (present=1, late=0.5, absent=0). Used for student %, batch averages, and list labels. */
-export function computeAttendancePercent(records: Pick<DailyAttendanceRecord, 'status'>[]): number {
+/**
+ * Attendance % against scheduled class days (through today).
+ * Present=1, late=0.5, absent=0, unmarked/missed class day=0.
+ * Denominator is expected class days — not only marked days — so skipped marking lowers %.
+ */
+export function computeAttendancePercent(
+  records: Array<{ status: AttendanceMark; date?: string | null }>,
+  schedule?: AttendanceScheduleInput | null,
+): number {
+  const classDayType = schedule?.classDayType || 'weekdays'
+  const expectedDays = schedule
+    ? listExpectedClassDays({
+        startDate: schedule.startDate,
+        endDate: schedule.endDate,
+        classDayType,
+        customDays: schedule.customDays,
+        throughDate: schedule.throughDate,
+      })
+    : []
+
+  if (expectedDays.length > 0) {
+    const byDate = new Map<string, AttendanceMark>()
+    for (const record of records) {
+      if (!record.date || record.status === 'unmarked') continue
+      byDate.set(record.date.slice(0, 10), record.status)
+    }
+
+    let score = 0
+    for (const day of expectedDays) {
+      const status = byDate.get(day)
+      if (status) score += attendanceStatusWeight(status)
+    }
+
+    return Math.round((score / expectedDays.length) * 100)
+  }
+
+  // Fallback when batch schedule is missing: marked days only.
   const marked = records.filter((record) => record.status !== 'unmarked')
   if (!marked.length) return 0
 
@@ -259,6 +356,32 @@ export function computeAttendancePercent(records: Pick<DailyAttendanceRecord, 's
 export function formatAttendanceAverageLabel(percent: number, hasRecords: boolean) {
   if (!hasRecords) return '—'
   return `${percent}%`
+}
+
+type BatchScheduleRow = {
+  id: string
+  start_date: string | null
+  end_date: string | null
+  class_day_type: ClassDayType | null
+}
+
+async function fetchBatchSchedulesById(
+  batchIds: string[],
+  client: SupabaseClient,
+): Promise<Map<string, BatchScheduleRow>> {
+  const map = new Map<string, BatchScheduleRow>()
+  if (!batchIds.length) return map
+
+  const { data } = await client
+    .from('batches')
+    .select('id, start_date, end_date, class_day_type')
+    .in('id', batchIds)
+
+  for (const row of (data || []) as BatchScheduleRow[]) {
+    map.set(row.id, row)
+  }
+
+  return map
 }
 
 function mapDbRowToDailyRecord(row: DbAttendanceRow, batch?: AttendanceBatch | null): DailyAttendanceRecord {
@@ -359,35 +482,68 @@ export async function fetchBatchAttendanceAverages(
 
   if (!batchIds.length) return result
 
-  const { data, error } = await client
-    .from('student_attendance_records')
-    .select('batch_id, status')
-    .in('batch_id', batchIds)
+  batchIds.forEach((batchId) => {
+    result.set(batchId, { batchId, averageLabel: '—', averagePercent: 0 })
+  })
 
-  if (error || !data?.length) {
-    batchIds.forEach((batchId) => {
-      result.set(batchId, { batchId, averageLabel: '—', averagePercent: 0 })
+  const [schedules, { data, error }] = await Promise.all([
+    fetchBatchSchedulesById(batchIds, client),
+    client
+      .from('student_attendance_records')
+      .select('batch_id, student_id, status, attendance_date')
+      .in('batch_id', batchIds),
+  ])
+
+  if (error || !data?.length) return result
+
+  const grouped = new Map<string, { status: AttendanceMark; date: string }[]>()
+
+  for (const row of data as {
+    batch_id: string
+    student_id: string
+    status: AttendanceMark
+    attendance_date: string
+  }[]) {
+    const key = `${row.batch_id}:${row.student_id}`
+    const list = grouped.get(key) || []
+    list.push({ status: row.status, date: row.attendance_date })
+    grouped.set(key, list)
+  }
+
+  const percentsByBatch = new Map<string, number[]>()
+
+  grouped.forEach((records, key) => {
+    const batchId = key.split(':')[0]
+    const schedule = schedules.get(batchId)
+    const percent = computeAttendancePercent(records, {
+      startDate: schedule?.start_date,
+      endDate: schedule?.end_date,
+      classDayType: schedule?.class_day_type || 'weekdays',
     })
-    return result
-  }
-
-  const grouped = new Map<string, AttendanceMark[]>()
-
-  for (const row of data as { batch_id: string; status: AttendanceMark }[]) {
-    const list = grouped.get(row.batch_id) || []
-    list.push(row.status)
-    grouped.set(row.batch_id, list)
-  }
+    const list = percentsByBatch.get(batchId) || []
+    list.push(percent)
+    percentsByBatch.set(batchId, list)
+  })
 
   batchIds.forEach((batchId) => {
-    const statuses = grouped.get(batchId) || []
-    const averagePercent = computeAttendancePercent(statuses.map((status) => ({ status })))
-    const hasRecords = statuses.some((status) => status !== 'unmarked')
+    const schedule = schedules.get(batchId)
+    const expectedDays = listExpectedClassDays({
+      startDate: schedule?.start_date,
+      endDate: schedule?.end_date,
+      classDayType: schedule?.class_day_type || 'weekdays',
+    })
+    const percents = percentsByBatch.get(batchId) || []
+    const hasSchedule = expectedDays.length > 0
+    const averagePercent = percents.length
+      ? Math.round(percents.reduce((sum, value) => sum + value, 0) / percents.length)
+      : hasSchedule
+        ? 0
+        : 0
 
     result.set(batchId, {
       batchId,
-      averageLabel: formatAttendanceAverageLabel(averagePercent, hasRecords),
-      averagePercent: hasRecords ? averagePercent : 0,
+      averageLabel: formatAttendanceAverageLabel(averagePercent, hasSchedule || percents.length > 0),
+      averagePercent,
     })
   })
 
@@ -413,27 +569,51 @@ export async function fetchEnrollmentAttendanceLabels(
 
   if (!batchIds.length || !studentIds.length) return labels
 
-  const { data, error } = await client
-    .from('student_attendance_records')
-    .select('batch_id, student_id, status')
-    .in('batch_id', batchIds)
-    .in('student_id', studentIds)
+  const [schedules, { data, error }] = await Promise.all([
+    fetchBatchSchedulesById(batchIds, client),
+    client
+      .from('student_attendance_records')
+      .select('batch_id, student_id, status, attendance_date')
+      .in('batch_id', batchIds)
+      .in('student_id', studentIds),
+  ])
 
-  if (error || !data?.length) return labels
+  if (error) return labels
 
-  const grouped = new Map<string, AttendanceMark[]>()
+  const grouped = new Map<string, { status: AttendanceMark; date: string }[]>()
 
-  for (const row of data as { batch_id: string; student_id: string; status: AttendanceMark }[]) {
+  for (const row of (data || []) as {
+    batch_id: string
+    student_id: string
+    status: AttendanceMark
+    attendance_date: string
+  }[]) {
     const key = `${row.student_id}:${row.batch_id}`
     const list = grouped.get(key) || []
-    list.push(row.status)
+    list.push({ status: row.status, date: row.attendance_date })
     grouped.set(key, list)
   }
 
-  grouped.forEach((statuses, key) => {
-    const hasRecords = statuses.some((status) => status !== 'unmarked')
-    const percent = computeAttendancePercent(statuses.map((status) => ({ status })))
-    labels.set(key, formatAttendanceAverageLabel(percent, hasRecords))
+  enrollments.forEach((item) => {
+    const key = `${item.studentId}:${item.batchId}`
+    const schedule = schedules.get(item.batchId)
+    const expectedDays = listExpectedClassDays({
+      startDate: schedule?.start_date,
+      endDate: schedule?.end_date,
+      classDayType: schedule?.class_day_type || 'weekdays',
+    })
+    if (!expectedDays.length) {
+      labels.set(key, '—')
+      return
+    }
+
+    const records = grouped.get(key) || []
+    const percent = computeAttendancePercent(records, {
+      startDate: schedule?.start_date,
+      endDate: schedule?.end_date,
+      classDayType: schedule?.class_day_type || 'weekdays',
+    })
+    labels.set(key, formatAttendanceAverageLabel(percent, true))
   })
 
   return labels
@@ -623,9 +803,17 @@ export function mapBatchStudentsToAttendanceStudents(
   batch: AttendanceBatch,
   records: DailyAttendanceRecord[],
 ): AttendanceStudent[] {
+  const schedule = {
+    startDate: batch.start_date,
+    endDate: batch.end_date,
+    classDayType: batch.class_day_type || 'weekdays',
+    customDays: batch.custom_days,
+  }
+  const expectedDays = listExpectedClassDays(schedule)
+
   return students.map((student) => {
     const studentRecords = records.filter((record) => record.studentId === student.id)
-    const percent = computeAttendancePercent(studentRecords)
+    const percent = computeAttendancePercent(studentRecords, schedule)
 
     return {
       id: student.id,
@@ -633,7 +821,7 @@ export function mapBatchStudentsToAttendanceStudents(
       course: batch.course,
       batch: batch.name,
       batchId: batch.id,
-      attendance: studentRecords.some((record) => record.status !== 'unmarked') ? `${percent}%` : '—',
+      attendance: expectedDays.length > 0 ? `${percent}%` : '—',
       status: student.status,
       email: student.email,
       phone: student.phone,

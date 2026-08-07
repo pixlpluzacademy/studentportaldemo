@@ -22,6 +22,7 @@ import {
   fetchAttendanceRecords,
   formatAttendanceAverageLabel,
   isAttendanceClassDay,
+  listExpectedClassDays,
   saveAttendanceMarks,
   type AttendanceMark,
   type DailyAttendanceRecord,
@@ -372,13 +373,33 @@ export default function Page() {
     }
   }, [studentId, activeBranchId, branchLoading, staffScoped, user?.id, canViewTasks, canViewSubmissions])
 
+  const attendanceSchedule = useMemo(
+    () =>
+      student
+        ? {
+            startDate: student.batch_start_date,
+            endDate: student.batch_end_date,
+            classDayType: student.batch_class_day_type || 'weekdays',
+            customDays: student.batch_custom_days || [],
+          }
+        : null,
+    [student],
+  )
+
   const attendancePercent = useMemo(
-    () => computeAttendancePercent(attendanceRecords),
-    [attendanceRecords],
+    () => computeAttendancePercent(attendanceRecords, attendanceSchedule),
+    [attendanceRecords, attendanceSchedule],
   )
   const attendanceLabel = useMemo(
-    () => formatAttendanceAverageLabel(attendancePercent, attendanceRecords.length > 0),
-    [attendancePercent, attendanceRecords.length],
+    () =>
+      formatAttendanceAverageLabel(
+        attendancePercent,
+        Boolean(
+          attendanceSchedule &&
+            listExpectedClassDays(attendanceSchedule).length > 0,
+        ),
+      ),
+    [attendancePercent, attendanceSchedule],
   )
   const presentCount = useMemo(
     () => attendanceRecords.filter((record) => record.status === 'present').length,
@@ -708,8 +729,8 @@ export default function Page() {
             <p className="mt-1 text-xl font-bold">{attendanceLoading ? '…' : attendanceLabel}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {attendanceRecords.length > 0
-                ? `${presentCount} present · ${absentCount} absent · ${lateCount} late`
-                : 'No marked sessions yet'}
+                ? `${presentCount} present · ${absentCount} absent · ${lateCount} late · vs class days`
+                : 'Based on all class days through today'}
             </p>
           </CardContent>
         </Card>
