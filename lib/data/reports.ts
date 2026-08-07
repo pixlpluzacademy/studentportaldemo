@@ -29,7 +29,9 @@ export type AttendanceTrendPoint = {
   [dataKey: string]: string | number | null
 }
 
-const TREND_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4']
+/** Fixed palette for selected trend lines — by selection order, never by department. */
+export const ATTENDANCE_TREND_COLORS = ['#3b82f6', '#f59e0b', '#ec4899', '#6ee75a'] as const
+const TREND_COLORS = ATTENDANCE_TREND_COLORS
 
 export type ReportGraphPoint = {
   label: string
@@ -769,6 +771,7 @@ export async function fetchAttendanceTrend(options: {
     return { points: [], series: [], error: 'Invalid date range.' }
   }
 
+  // Color = selection slot (1st/2nd/3rd/4th), not department.
   const series: AttendanceTrendSeries[] = batchIds.map((batchId, index) => ({
     batchId,
     batchName: options.batchNames?.[batchId] || `Batch ${index + 1}`,

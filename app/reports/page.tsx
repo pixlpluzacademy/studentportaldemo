@@ -26,6 +26,7 @@ import {
   fetchReportsSnapshot,
   fetchReviewPipeline,
   getAttendanceTrendPresetDates,
+  ATTENDANCE_TREND_COLORS,
   type AttendanceTrendPoint,
   type AttendanceTrendRange,
   type AttendanceTrendSeries,
@@ -1510,24 +1511,39 @@ export default function Page() {
                 <p className="text-sm text-muted-foreground">Select at least one batch.</p>
               ) : (
                 <div className="space-y-2">
-                  {selectedTrendBatches.map((batch) => (
-                    <div
-                      key={batch.id}
-                      className="flex items-center justify-between gap-2 border border-border bg-card px-3 py-2 text-sm"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-semibold">{batch.name}</div>
-                        <div className="truncate text-xs text-muted-foreground">{batch.departmentName}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeTrendBatch(batch.id)}
-                        className="shrink-0 border border-border px-2 py-1 text-xs font-semibold hover:bg-accent"
+                  {selectedTrendBatches.map((batch, index) => {
+                    const lineColor =
+                      trendSeries.find((item) => item.batchId === batch.id)?.color ||
+                      ATTENDANCE_TREND_COLORS[index % ATTENDANCE_TREND_COLORS.length]
+
+                    return (
+                      <div
+                        key={batch.id}
+                        className="flex items-center justify-between gap-2 border border-border bg-card px-3 py-2 text-sm"
                       >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                            style={{ background: lineColor }}
+                            title={`Line colour ${index + 1}`}
+                          />
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold">{batch.name}</div>
+                            <div className="truncate text-xs text-muted-foreground">
+                              {batch.departmentName}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeTrendBatch(batch.id)}
+                          className="shrink-0 border border-border px-2 py-1 text-xs font-semibold hover:bg-accent"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -1541,7 +1557,8 @@ export default function Page() {
           <AttendanceTrendChart points={trendPoints} series={trendSeries} loading={trendLoading || loading} />
           <p className="mt-3 text-xs text-muted-foreground">
             X: {trendFromDate} → {trendToDate} · Y: daily attendance % (present students ÷ batch
-            students). All present = 100%. Max 93 days · max {TREND_BATCH_LIMIT} batches.
+            students). All present = 100%. Max 93 days · max {TREND_BATCH_LIMIT} batches. Line colours
+            follow selection order (not department).
           </p>
         </ChartCard>
       )}
