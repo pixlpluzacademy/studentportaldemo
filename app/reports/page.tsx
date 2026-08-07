@@ -42,6 +42,7 @@ import {
   type ReportDepartmentBatchStat,
   type ReportsSnapshot,
 } from '@/lib/data/reports'
+import { BATCH_MODE_ONSITE_LABEL } from '@/lib/data/batch-code'
 
 const TREND_BATCH_LIMIT = 4
 const TREND_SEARCH_RESULT_LIMIT = 20
@@ -826,7 +827,9 @@ export default function Page() {
   const [trendFromDate, setTrendFromDate] = useState(() => getAttendanceTrendPresetDates('weekly').fromDate)
   const [trendToDate, setTrendToDate] = useState(() => getAttendanceTrendPresetDates('weekly').toDate)
   const [trendDepartmentId, setTrendDepartmentId] = useState('all')
+  const [trendBatchMode, setTrendBatchMode] = useState<'all' | 'online' | 'offline'>('all')
   const [trendBatchSearch, setTrendBatchSearch] = useState('')
+  const [trendBatchDropdownOpen, setTrendBatchDropdownOpen] = useState(false)
   const [trendBatchIds, setTrendBatchIds] = useState<string[]>([])
   const [trendPoints, setTrendPoints] = useState<AttendanceTrendPoint[]>([])
   const [trendSeries, setTrendSeries] = useState<AttendanceTrendSeries[]>([])
@@ -924,19 +927,31 @@ export default function Page() {
   const departmentOptions = snapshot?.departments || []
   const batchCatalog = useMemo(() => snapshot?.batchCatalog || [], [snapshot])
 
-  const trendBatchesForPicker = useMemo(() => {
+  const batchOverlapsTrendDates = (batch: ReportBatchOption) => {
+    const start = batch.startDate?.slice(0, 10)
+    const end = batch.endDate?.slice(0, 10)
+    if (!start || !end || !trendFromDate || !trendToDate) return false
+    return start <= trendToDate && end >= trendFromDate
+  }
+
+  const trendFilteredBatches = useMemo(() => {
     const query = trendBatchSearch.trim().toLowerCase()
-    return batchCatalog
-      .filter((batch) => {
-        if (trendDepartmentId !== 'all' && batch.departmentId !== trendDepartmentId) return false
-        if (!query) return true
-        return (
-          batch.name.toLowerCase().includes(query) ||
-          batch.departmentName.toLowerCase().includes(query)
-        )
-      })
-      .slice(0, TREND_SEARCH_RESULT_LIMIT)
-  }, [batchCatalog, trendBatchSearch, trendDepartmentId])
+    return batchCatalog.filter((batch) => {
+      if (trendDepartmentId !== 'all' && batch.departmentId !== trendDepartmentId) return false
+      if (trendBatchMode !== 'all' && batch.batchMode !== trendBatchMode) return false
+      if (!batchOverlapsTrendDates(batch)) return false
+      if (!query) return true
+      return (
+        batch.name.toLowerCase().includes(query) ||
+        batch.departmentName.toLowerCase().includes(query)
+      )
+    })
+  }, [batchCatalog, trendBatchMode, trendBatchSearch, trendDepartmentId, trendFromDate, trendToDate])
+
+  const trendBatchesForPicker = useMemo(
+    () => trendFilteredBatches.slice(0, TREND_SEARCH_RESULT_LIMIT),
+    [trendFilteredBatches],
+  )
 
   const selectedTrendBatches = useMemo(() => {
     const byId = new Map(batchCatalog.map((batch) => [batch.id, batch]))
@@ -945,31 +960,30 @@ export default function Page() {
       .filter((batch): batch is ReportBatchOption => Boolean(batch))
   }, [batchCatalog, trendBatchIds])
 
-  const trendMatchCount = useMemo(() => {
-    const query = trendBatchSearch.trim().toLowerCase()
-    return batchCatalog.filter((batch) => {
-      if (trendDepartmentId !== 'all' && batch.departmentId !== trendDepartmentId) return false
-      if (!query) return true
-      return (
-        batch.name.toLowerCase().includes(query) ||
-        batch.departmentName.toLowerCase().includes(query)
-      )
-    }).length
-  }, [batchCatalog, trendBatchSearch, trendDepartmentId])
+  const trendMatchCount = trendFilteredBatches.length
 
   useEffect(() => {
-    if (!batchCatalog.length) {
-      setTrendBatchIds([])
-      return
-    }
-
     setTrendBatchIds((current) => {
-      const stillValid = current.filter((id) => batchCatalog.some((batch) => batch.id === id))
+      const matchesFilters = (batch: ReportBatchOption) => {
+        if (trendDepartmentId !== 'all' && batch.departmentId !== trendDepartmentId) return false
+        if (trendBatchMode !== 'all' && batch.batchMode !== trendBatchMode) return false
+        const start = batch.startDate?.slice(0, 10)
+        const end = batch.endDate?.slice(0, 10)
+        if (!start || !end || !trendFromDate || !trendToDate) return false
+        return start <= trendToDate && end >= trendFromDate
+      }
+
+      const stillValid = current
+        .map((id) => batchCatalog.find((batch) => batch.id === id))
+        .filter((batch): batch is ReportBatchOption => Boolean(batch && matchesFilters(batch)))
+        .map((batch) => batch.id)
+
       if (stillValid.length) return stillValid.slice(0, TREND_BATCH_LIMIT)
-      // Default: one batch only — do not auto-pick many when catalog is large.
-      return [batchCatalog[0].id]
+
+      const firstMatch = batchCatalog.find(matchesFilters)
+      return firstMatch ? [firstMatch.id] : []
     })
-  }, [batchCatalog])
+  }, [batchCatalog, trendBatchMode, trendDepartmentId, trendFromDate, trendToDate])
 
   useEffect(() => {
     if (!canSeeAcademic || !trendBatchIds.length) {
@@ -1368,7 +1382,7 @@ export default function Page() {
       {canSeeAcademic && (
         <ChartCard
           title="Attendance Trend"
-          subtitle="Search batches by department, then compare up to 4 on the chart."
+          subtitle="Filter by date, department, and mode. Pick up to 4 batches — type to find them."
           action={
             <div className="inline-flex border border-border p-0.5">
               <button
@@ -1396,7 +1410,7 @@ export default function Page() {
             </div>
           }
         >
-          <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <label className="space-y-1.5 text-sm">
               <span className="font-semibold text-muted-foreground">From date</span>
               <input
@@ -1424,6 +1438,7 @@ export default function Page() {
                 onChange={(event) => {
                   setTrendDepartmentId(event.target.value)
                   setTrendBatchSearch('')
+                  setTrendBatchDropdownOpen(false)
                 }}
                 className={selectClass}
                 aria-label="Filter batches by department"
@@ -1439,114 +1454,140 @@ export default function Page() {
               </select>
             </label>
             <label className="space-y-1.5 text-sm">
+              <span className="font-semibold text-muted-foreground">Mode</span>
+              <select
+                value={trendBatchMode}
+                onChange={(event) => {
+                  setTrendBatchMode(event.target.value as 'all' | 'online' | 'offline')
+                  setTrendBatchSearch('')
+                  setTrendBatchDropdownOpen(false)
+                }}
+                className={selectClass}
+                aria-label="Filter batches by mode"
+              >
+                <option value="all" className={optionClass}>
+                  All modes
+                </option>
+                <option value="online" className={optionClass}>
+                  Online
+                </option>
+                <option value="offline" className={optionClass}>
+                  {BATCH_MODE_ONSITE_LABEL}
+                </option>
+              </select>
+            </label>
+            <label className="relative space-y-1.5 text-sm">
               <span className="font-semibold text-muted-foreground">
-                Search batch <span className="font-normal">({trendBatchIds.length}/{TREND_BATCH_LIMIT})</span>
+                Batch <span className="font-normal">({trendBatchIds.length}/{TREND_BATCH_LIMIT})</span>
               </span>
               <input
-                type="search"
+                type="text"
                 value={trendBatchSearch}
-                onChange={(event) => setTrendBatchSearch(event.target.value)}
-                placeholder="Type batch name…"
+                onChange={(event) => {
+                  setTrendBatchSearch(event.target.value)
+                  setTrendBatchDropdownOpen(true)
+                }}
+                onFocus={() => setTrendBatchDropdownOpen(true)}
+                onBlur={() => {
+                  window.setTimeout(() => setTrendBatchDropdownOpen(false), 150)
+                }}
+                placeholder="Type or select batch…"
                 className={selectClass}
-                aria-label="Search batches for attendance trend"
+                aria-label="Select batch for attendance trend"
+                aria-expanded={trendBatchDropdownOpen}
+                autoComplete="off"
               />
+              {trendBatchDropdownOpen && (
+                <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-56 overflow-y-auto border border-border bg-card shadow-md">
+                  {trendBatchesForPicker.length === 0 ? (
+                    <p className="px-3 py-3 text-sm text-muted-foreground">No batches match these filters.</p>
+                  ) : (
+                    trendBatchesForPicker.map((batch) => {
+                      const selected = trendBatchIds.includes(batch.id)
+                      const atLimit = !selected && trendBatchIds.length >= TREND_BATCH_LIMIT
+                      return (
+                        <button
+                          key={batch.id}
+                          type="button"
+                          disabled={selected || atLimit}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            addTrendBatch(batch.id)
+                            setTrendBatchSearch('')
+                            setTrendBatchDropdownOpen(false)
+                          }}
+                          className="flex w-full items-center justify-between gap-3 border-b border-border px-3 py-2.5 text-left text-sm last:border-b-0 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate font-semibold">{batch.name}</span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {batch.departmentName} · {batch.batchMode === 'online' ? 'Online' : BATCH_MODE_ONSITE_LABEL}
+                              {batch.startDate && batch.endDate
+                                ? ` · ${batch.startDate} → ${batch.endDate}`
+                                : ''}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-xs font-semibold text-muted-foreground">
+                            {selected ? 'Added' : atLimit ? 'Limit' : 'Add'}
+                          </span>
+                        </button>
+                      )
+                    })
+                  )}
+                  {trendMatchCount > TREND_SEARCH_RESULT_LIMIT && (
+                    <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                      Showing first {TREND_SEARCH_RESULT_LIMIT} of {trendMatchCount}. Type to narrow.
+                    </div>
+                  )}
+                </div>
+              )}
             </label>
           </div>
 
-          <div className="mb-4 grid gap-3 lg:grid-cols-[1.4fr_1fr]">
-            <div className="border border-border bg-background/40">
-              <div className="flex items-center justify-between border-b border-border px-3 py-2 text-xs text-muted-foreground">
-                <span>
-                  Showing {trendBatchesForPicker.length}
-                  {trendMatchCount > TREND_SEARCH_RESULT_LIMIT
-                    ? ` of ${trendMatchCount}`
-                    : trendMatchCount
-                      ? ` / ${trendMatchCount}`
-                      : ''}{' '}
-                  batches
-                </span>
-                <span>Click to add · max {TREND_BATCH_LIMIT}</span>
-              </div>
-              <div className="max-h-48 overflow-y-auto">
-                {batchCatalog.length === 0 ? (
-                  <p className="px-3 py-4 text-sm text-muted-foreground">No batches available in this branch.</p>
-                ) : trendBatchesForPicker.length === 0 ? (
-                  <p className="px-3 py-4 text-sm text-muted-foreground">No batches match this department/search.</p>
-                ) : (
-                  trendBatchesForPicker.map((batch) => {
-                    const selected = trendBatchIds.includes(batch.id)
-                    const atLimit = !selected && trendBatchIds.length >= TREND_BATCH_LIMIT
-                    return (
-                      <button
-                        key={batch.id}
-                        type="button"
-                        disabled={selected || atLimit}
-                        onClick={() => addTrendBatch(batch.id)}
-                        className="flex w-full items-center justify-between gap-3 border-b border-border px-3 py-2.5 text-left text-sm last:border-b-0 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate font-semibold">{batch.name}</span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {batch.departmentName}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-xs font-semibold text-muted-foreground">
-                          {selected ? 'Added' : atLimit ? 'Limit' : 'Add'}
-                        </span>
-                      </button>
-                    )
-                  })
-                )}
-              </div>
-              {trendMatchCount > TREND_SEARCH_RESULT_LIMIT && (
-                <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
-                  Refine search or department to see more batches.
-                </div>
-              )}
-            </div>
+          <div className="mb-4 border border-border bg-background/40 p-3">
+            <div className="mb-2 text-sm font-semibold">Selected for chart</div>
+            {selectedTrendBatches.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No batches selected. Adjust filters or pick a batch from the dropdown.
+              </p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {selectedTrendBatches.map((batch, index) => {
+                  const lineColor =
+                    trendSeries.find((item) => item.batchId === batch.id)?.color ||
+                    ATTENDANCE_TREND_COLORS[index % ATTENDANCE_TREND_COLORS.length]
 
-            <div className="border border-border bg-background/40 p-3">
-              <div className="mb-2 text-sm font-semibold">Selected for chart</div>
-              {selectedTrendBatches.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Select at least one batch.</p>
-              ) : (
-                <div className="space-y-2">
-                  {selectedTrendBatches.map((batch, index) => {
-                    const lineColor =
-                      trendSeries.find((item) => item.batchId === batch.id)?.color ||
-                      ATTENDANCE_TREND_COLORS[index % ATTENDANCE_TREND_COLORS.length]
-
-                    return (
-                      <div
-                        key={batch.id}
-                        className="flex items-center justify-between gap-2 border border-border bg-card px-3 py-2 text-sm"
-                      >
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span
-                            className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                            style={{ background: lineColor }}
-                            title={`Line colour ${index + 1}`}
-                          />
-                          <div className="min-w-0">
-                            <div className="truncate font-semibold">{batch.name}</div>
-                            <div className="truncate text-xs text-muted-foreground">
-                              {batch.departmentName}
-                            </div>
+                  return (
+                    <div
+                      key={batch.id}
+                      className="flex items-center justify-between gap-2 border border-border bg-card px-3 py-2 text-sm"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                          style={{ background: lineColor }}
+                          title={`Line colour ${index + 1}`}
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold">{batch.name}</div>
+                          <div className="truncate text-xs text-muted-foreground">
+                            {batch.departmentName} ·{' '}
+                            {batch.batchMode === 'online' ? 'Online' : BATCH_MODE_ONSITE_LABEL}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => removeTrendBatch(batch.id)}
-                          className="shrink-0 border border-border px-2 py-1 text-xs font-semibold hover:bg-accent"
-                        >
-                          Remove
-                        </button>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+                      <button
+                        type="button"
+                        onClick={() => removeTrendBatch(batch.id)}
+                        className="shrink-0 border border-border px-2 py-1 text-xs font-semibold hover:bg-accent"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
 
           {trendNotice && (

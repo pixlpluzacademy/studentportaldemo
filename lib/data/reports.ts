@@ -70,6 +70,10 @@ export type ReportBatchOption = {
   name: string
   departmentId: string | null
   departmentName: string
+  batchMode: 'online' | 'offline'
+  startDate: string | null
+  endDate: string | null
+  courseType?: string | null
 }
 
 export type ReportMarksTaskOption = {
@@ -417,6 +421,10 @@ export async function fetchReportsSnapshot(options: {
         name: batch.name,
         departmentId: batch.department_id,
         departmentName: batch.department_name || '—',
+        batchMode: batch.batch_mode,
+        startDate: batch.start_date,
+        endDate: batch.end_date,
+        courseType: batch.course_type,
       }))
       .sort((a, b) => a.name.localeCompare(b.name))
 
