@@ -12,6 +12,7 @@ export type TaskListRow = {
   course: string
   batch: string
   batchId: string
+  batchCode: string | null
   assignedBy: string
   frequency: TaskFrequency
   due: string
@@ -20,6 +21,7 @@ export type TaskListRow = {
   submissions: string
   status: TaskUiStatus
   fileRequirement: string
+  fileRequired: boolean
   attachmentName: string
   attachmentPath: string | null
   studentSubmitted: boolean
@@ -40,6 +42,7 @@ export type TaskBatchLookup = {
   name: string
   courseName: string
   enrolledCount: number
+  batchCode?: string | null
 }
 
 export type BatchTaskStats = {
@@ -80,6 +83,7 @@ type DbTaskRow = {
   due_date: string
   due_time: string | null
   file_requirement: string | null
+  file_required: boolean | null
   attachment_path: string | null
   attachment_name: string | null
   status: DbTaskStatus
@@ -205,6 +209,7 @@ function mapDbTaskRow(
     course: courseName,
     batch: batchName,
     batchId: row.batch_id,
+    batchCode: batchMeta?.batchCode ?? null,
     assignedBy: assigner?.full_name?.trim() || 'Staff',
     frequency: mapFrequencyLabel(row.frequency),
     due: row.due_date,
@@ -221,6 +226,7 @@ function mapDbTaskRow(
     fileRequirement:
       row.file_requirement?.trim() ||
       'Student must upload the requested work file before the submission date.',
+    fileRequired: Boolean(row.file_required),
     attachmentName: row.attachment_name?.trim() || '',
     attachmentPath: row.attachment_path,
     studentSubmitted,
@@ -436,6 +442,7 @@ export async function fetchTaskList(
         due_date,
         due_time,
         file_requirement,
+        file_required,
         attachment_path,
         attachment_name,
         status,
@@ -533,6 +540,7 @@ export async function fetchTaskById(
         due_date,
         due_time,
         file_requirement,
+        file_required,
         attachment_path,
         attachment_name,
         status,
@@ -736,6 +744,27 @@ export async function createTask(
 
   if (!response.ok) {
     return { ok: false, error: payload.error || 'Failed to create task.' }
+  }
+
+  return { ok: true, taskId: payload.taskId }
+}
+
+export async function updateTask(
+  formData: FormData,
+  accessToken: string,
+): Promise<{ ok: boolean; error?: string; taskId?: string }> {
+  const response = await fetch('/api/admin/tasks', {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: formData,
+  })
+
+  const payload = (await response.json()) as { error?: string; taskId?: string }
+
+  if (!response.ok) {
+    return { ok: false, error: payload.error || 'Failed to update task.' }
   }
 
   return { ok: true, taskId: payload.taskId }

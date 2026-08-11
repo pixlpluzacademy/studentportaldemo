@@ -229,7 +229,7 @@ export async function POST(request: Request) {
 
     const { data: task, error: taskError } = await supabaseAdmin
       .from('tasks')
-      .select('id, batch_id, due_date, due_time, student_id, status')
+      .select('id, batch_id, due_date, due_time, student_id, status, file_required')
       .eq('id', taskId)
       .maybeSingle()
 
@@ -309,6 +309,15 @@ export async function POST(request: Request) {
 
     if (task.student_id && task.student_id !== student.id) {
       return NextResponse.json({ error: 'This task is not assigned to you.' }, { status: 403 })
+    }
+
+    const hasNewFile = Boolean(submissionFile && submissionFile.size > 0)
+
+    if (task.file_required && !hasNewFile && !existingSubmission?.file_path) {
+      return NextResponse.json(
+        { error: 'This task requires a file. Please attach a file before submitting.' },
+        { status: 400 },
+      )
     }
 
     let filePath: string | null = existingSubmission?.file_path || null

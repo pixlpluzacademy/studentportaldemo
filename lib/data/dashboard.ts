@@ -211,7 +211,10 @@ export async function fetchDashboardStats(
         ? fetchStudentList(studentListOptions, client)
         : Promise.resolve({ data: [], error: undefined }),
       branchId ? fetchMentorList(branchId, client) : Promise.resolve({ data: [], error: undefined }),
-      fetchComplaints({ branchId }),
+      fetchComplaints({
+        branchId: isStudent ? null : branchId,
+        studentId: isStudent ? studentId : null,
+      }),
       fetchBatchAttendanceAverages(batchIds, client),
     ])
 

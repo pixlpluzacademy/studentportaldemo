@@ -1,11 +1,14 @@
 'use client'
 
+import Image from 'next/image'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { useTheme } from 'next-themes'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import { getAssignmentMaxMarks, getAssignmentTypeLabel } from '@/lib/data/tasks'
 import {
   fetchTaskSubmissionById,
   getFinalSubmissionStatus,
@@ -16,6 +19,31 @@ import {
   type TaskSubmissionDetailRow,
 } from '@/lib/data/task-submissions'
 import { createClient } from '@/lib/supabase/client'
+
+function CustomIcon({
+  icon,
+  folder,
+  alt = '',
+  className = '',
+}: {
+  icon: string
+  folder: string
+  alt?: string
+  className?: string
+}) {
+  return (
+    <Image
+      src={`/icons/${folder}/${icon}`}
+      alt={alt}
+      width={24}
+      height={24}
+      className={`shrink-0 object-contain ${className}`}
+      onError={(event) => {
+        event.currentTarget.src = `/icons/${folder}/dashboard.svg`
+      }}
+    />
+  )
+}
 
 function getDecisionClass(decision: string) {
   const value = decision.toLowerCase()
@@ -54,6 +82,7 @@ function ReviewBlock({
   title,
   roleLabel,
   mark,
+  maxMark,
   comment,
   decision,
   canReview,
@@ -72,6 +101,7 @@ function ReviewBlock({
   title: string
   roleLabel: string
   mark: string
+  maxMark: number
   comment: string
   decision: ReviewDecision
   canReview: boolean
@@ -102,12 +132,15 @@ function ReviewBlock({
 
       <div className="mt-5 grid gap-4 md:grid-cols-[160px_1fr]">
         <div className="space-y-2">
-          <label className="text-sm font-semibold">Mark</label>
+          <label className="text-sm font-semibold">Mark (out of {maxMark})</label>
           <input
+            type="number"
+            min={0}
+            max={maxMark}
             value={mark}
             onChange={(event) => onMarkChange(event.target.value)}
             disabled={!canReview || saving}
-            placeholder="Example: 85"
+            placeholder={`0 - ${maxMark}`}
             className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] disabled:cursor-not-allowed disabled:opacity-60 dark:focus:border-[#6ee75a]"
           />
         </div>
@@ -196,6 +229,8 @@ export default function Page() {
   const submissionId = String(params?.id || '')
   const { can, role, parentRoleId, user } = useAuth()
   const { activeBranchId, loading: branchLoading } = useBranchScope()
+  const { resolvedTheme } = useTheme()
+  const iconFolder = resolvedTheme === 'dark' ? 'dark-mode' : 'light-mode'
 
   const [submission, setSubmission] = useState<TaskSubmissionDetailRow | null>(null)
   const [loading, setLoading] = useState(true)
@@ -262,6 +297,7 @@ export default function Page() {
         branchId: activeBranchId || '',
         userId: user!.id,
         parentRoleId,
+        branchWide: hasQaReviewPermission,
       })
 
       if (cancelled) return
@@ -296,7 +332,7 @@ export default function Page() {
     return () => {
       cancelled = true
     }
-  }, [activeBranchId, branchLoading, isStudent, parentRoleId, submissionId, user?.id])
+  }, [activeBranchId, branchLoading, hasQaReviewPermission, isStudent, parentRoleId, submissionId, user?.id])
 
   const finalStatus = useMemo(() => {
     if (!submission) return ''
@@ -499,7 +535,8 @@ export default function Page() {
   if (!submission) {
     return (
       <div className="space-y-4">
-        <Link href="/task-submissions" className="inline-flex border border-border px-4 py-2 text-sm font-semibold hover:bg-accent">
+        <Link href="/task-submissions" className="inline-flex items-center border border-border px-4 py-2 text-sm font-semibold hover:bg-accent">
+          <CustomIcon icon="arrow.svg" folder={iconFolder} alt="Back" className="mr-2 h-3 w-3 rotate-180" />
           Back to Task Submissions
         </Link>
         <div className="border border-border bg-card p-8">
@@ -514,7 +551,8 @@ export default function Page() {
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
-          <Link href="/task-submissions" className="text-sm font-semibold text-[#153e90] hover:underline dark:text-[#6ee75a]">
+          <Link href="/task-submissions" className="inline-flex items-center text-sm font-semibold text-[#153e90] hover:underline dark:text-[#6ee75a]">
+            <CustomIcon icon="arrow.svg" folder={iconFolder} alt="Back" className="mr-2 h-3 w-3 rotate-180" />
             Back to Task Submissions
           </Link>
           <h1 className="mt-2 text-3xl font-bold tracking-tight">Submission Review</h1>
@@ -550,6 +588,11 @@ export default function Page() {
 
             <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="border border-border bg-background/60 p-4">
+                <div className="text-xs text-muted-foreground">Student</div>
+                <div className="mt-1 font-semibold">{submission.student}</div>
+              </div>
+
+              <div className="border border-border bg-background/60 p-4">
                 <div className="text-xs text-muted-foreground">Course</div>
                 <div className="mt-1 font-semibold">{submission.course}</div>
               </div>
@@ -557,6 +600,16 @@ export default function Page() {
               <div className="border border-border bg-background/60 p-4">
                 <div className="text-xs text-muted-foreground">Batch</div>
                 <div className="mt-1 font-semibold">{submission.batch}</div>
+              </div>
+
+              <div className="border border-border bg-background/60 p-4">
+                <div className="text-xs text-muted-foreground">Assignment Type</div>
+                <div className="mt-1 font-semibold">{getAssignmentTypeLabel(submission.frequency)}</div>
+              </div>
+
+              <div className="border border-border bg-background/60 p-4">
+                <div className="text-xs text-muted-foreground">Max Mark</div>
+                <div className="mt-1 font-semibold">{getAssignmentMaxMarks(submission.frequency)}</div>
               </div>
 
               <div className="border border-border bg-background/60 p-4">
@@ -670,6 +723,7 @@ export default function Page() {
             title="Mentor Review"
             roleLabel="Mentor / Trainer"
             mark={submission.mentorMark === '-' ? '' : submission.mentorMark}
+            maxMark={getAssignmentMaxMarks(submission.frequency)}
             comment={submission.mentorComment}
             decision={submission.mentorDecision}
             canReview={Boolean(mentorStageOpen)}
@@ -690,6 +744,7 @@ export default function Page() {
             title="HOD Review"
             roleLabel="HOD"
             mark={submission.hodMark === '-' ? '' : submission.hodMark}
+            maxMark={getAssignmentMaxMarks(submission.frequency)}
             comment={submission.hodComment}
             decision={submission.hodDecision}
             canReview={Boolean(hodStageOpen)}
@@ -710,6 +765,7 @@ export default function Page() {
             title="Final QA Review"
             roleLabel="Final QA"
             mark={submission.qaMark === '-' ? '' : submission.qaMark}
+            maxMark={getAssignmentMaxMarks(submission.frequency)}
             comment={submission.qaComment}
             decision={submission.qaDecision}
             canReview={Boolean(qaStageOpen)}
@@ -729,22 +785,36 @@ export default function Page() {
 
         <aside className="space-y-5">
           <div className="border border-border bg-card p-5">
-            <h3 className="text-lg font-bold">Marks Summary</h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-lg font-bold">Marks Summary</h3>
+              <span className="border border-border bg-background/60 px-2 py-1 text-xs font-semibold text-muted-foreground">
+                Max {getAssignmentMaxMarks(submission.frequency)}
+              </span>
+            </div>
 
             <div className="mt-5 space-y-3 text-sm">
               <div className="flex items-center justify-between border border-border bg-background/60 p-3">
                 <span className="text-muted-foreground">Mentor Mark</span>
-                <span className="font-bold">{submission.mentorMark}</span>
+                <span className="font-bold">
+                  {submission.mentorMark}
+                  {submission.mentorMark !== '-' && ` / ${getAssignmentMaxMarks(submission.frequency)}`}
+                </span>
               </div>
 
               <div className="flex items-center justify-between border border-border bg-background/60 p-3">
                 <span className="text-muted-foreground">HOD Mark</span>
-                <span className="font-bold">{submission.hodMark}</span>
+                <span className="font-bold">
+                  {submission.hodMark}
+                  {submission.hodMark !== '-' && ` / ${getAssignmentMaxMarks(submission.frequency)}`}
+                </span>
               </div>
 
               <div className="flex items-center justify-between border border-border bg-background/60 p-3">
                 <span className="text-muted-foreground">Final QA Mark</span>
-                <span className="font-bold">{submission.qaMark}</span>
+                <span className="font-bold">
+                  {submission.qaMark}
+                  {submission.qaMark !== '-' && ` / ${getAssignmentMaxMarks(submission.frequency)}`}
+                </span>
               </div>
             </div>
           </div>

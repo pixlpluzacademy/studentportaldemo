@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import { fetchBatchById } from '@/lib/data/batches'
 import { fetchBatchStudents, type BatchStudentRow } from '@/lib/data/students'
 import {
   fetchTaskSubmissions,
@@ -69,6 +70,8 @@ export default function TaskDetailPage() {
   const { activeBranchId, loading: branchLoading } = useBranchScope()
 
   const [task, setTask] = useState<TaskListRow | null>(null)
+  const [assignedByRole, setAssignedByRole] = useState<string | null>(null)
+  const [batchCode, setBatchCode] = useState<string | null>(null)
   const [studentRows, setStudentRows] = useState<StudentSubmissionRow[]>([])
   const [loading, setLoading] = useState(true)
   const [studentsLoading, setStudentsLoading] = useState(false)
@@ -109,6 +112,7 @@ export default function TaskDetailPage() {
             name: batch.name,
             courseName: batch.course_name,
             enrolledCount: batch.enrolled_count,
+            batchCode: batch.batch_code,
           },
         ]),
       )
@@ -121,6 +125,22 @@ export default function TaskDetailPage() {
 
       if (cancelled) return
 
+      let resolvedAssignedByRole: string | null = null
+      let resolvedBatchCode: string | null = result.data?.batchCode ?? null
+
+      if (result.data) {
+        const batchDetail = await fetchBatchById(result.data.batchId)
+        if (cancelled) return
+        resolvedBatchCode = batchDetail.data?.batch_code ?? resolvedBatchCode
+        const assignerName = result.data.assignedBy.trim().toLowerCase()
+        const match = batchDetail.data?.staff_assignments.find(
+          (staff) => staff.staff_name.trim().toLowerCase() === assignerName,
+        )
+        resolvedAssignedByRole = match?.responsibility_title ?? null
+      }
+
+      setAssignedByRole(resolvedAssignedByRole)
+      setBatchCode(resolvedBatchCode)
       setTask(result.data)
       setError(result.error || (result.data ? null : 'Task not found or not in your scope.'))
       setLoading(false)
@@ -289,7 +309,7 @@ export default function TaskDetailPage() {
             <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">{getAssignmentTypeLabel(task.frequency)}</span>
           </div>
           <h1 className="mt-3 text-3xl font-bold tracking-tight">{task.title}</h1>
-          <p className="mt-2 max-w-3xl text-muted-foreground">{task.description}</p>
+          <p className="mt-2 whitespace-pre-wrap leading-relaxed text-muted-foreground">{task.description}</p>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -312,36 +332,68 @@ export default function TaskDetailPage() {
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Course</div>
-          <div className="mt-1 font-semibold">{task.course}</div>
-        </div>
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Batch</div>
-          <div className="mt-1 font-semibold">{task.batch}</div>
-        </div>
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Assigned By</div>
-          <div className="mt-1 font-semibold">{task.assignedBy}</div>
-        </div>
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Submission Deadline</div>
+        {isStudent ? (
+          <div className="border border-emerald-500/30 bg-emerald-500/10 p-5 xl:col-span-1">
+            <div className="text-xs text-emerald-700 dark:text-emerald-300">Assigned By</div>
+            <div className="mt-1 font-semibold">{task.assignedBy}</div>
+            {assignedByRole && (
+              <div className="mt-0.5 text-xs text-muted-foreground">{assignedByRole}</div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="border border-emerald-500/30 bg-emerald-500/10 p-5 xl:col-span-1">
+              <div className="text-xs text-emerald-700 dark:text-emerald-300">Course</div>
+              <div className="mt-1 font-semibold">{task.course}</div>
+            </div>
+
+            <div className="border border-emerald-500/30 bg-emerald-500/10 p-5 xl:col-span-1">
+              <div className="text-xs text-emerald-700 dark:text-emerald-300">Batch</div>
+              <div className="mt-1 font-semibold">{task.batch}</div>
+            </div>
+
+            <div className="border border-emerald-500/30 bg-emerald-500/10 p-5 xl:col-span-1">
+              <div className="text-xs text-emerald-700 dark:text-emerald-300">Batch ID</div>
+              <div className="mt-1 font-mono text-sm font-semibold [overflow-wrap:anywhere]">
+                {batchCode || '—'}
+              </div>
+            </div>
+
+            <div className="border border-border bg-card p-5 xl:col-span-1">
+              <div className="text-xs text-muted-foreground">Assigned By</div>
+              <div className="mt-1 font-semibold">{task.assignedBy}</div>
+              {assignedByRole && (
+                <div className="mt-0.5 text-xs text-muted-foreground">{assignedByRole}</div>
+              )}
+            </div>
+          </>
+        )}
+
+        <div className="border border-purple-500/30 bg-purple-500/10 p-5 xl:col-span-1">
+          <div className="text-xs text-purple-700 dark:text-purple-300">Submission Deadline</div>
           <div className="mt-1 font-semibold">{task.dueDisplay}</div>
           {task.dueTime && (
-            <div className="mt-2 text-xs text-[#153e90] dark:text-[#6ee75a]">Time scheduled for this task</div>
+            <div className="mt-2 text-xs text-purple-700 dark:text-purple-300">Time scheduled for this task</div>
           )}
+        </div>
+
+        <div
+          className={`border border-red-500/30 bg-red-500/10 p-5 ${
+            isStudent ? 'md:col-span-2 xl:col-span-2' : 'md:col-span-2 xl:col-span-3'
+          }`}
+        >
+          <div className="text-xs text-red-700 dark:text-red-300">File Requirement</div>
+          <div className="mt-1 text-sm font-medium leading-relaxed text-foreground [overflow-wrap:anywhere]">
+            {task.fileRequirement}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
-        <div className="space-y-5">
+      <div className="grid gap-4 xl:grid-cols-4 xl:items-start">
+        <div className="space-y-4 xl:col-span-3">
           <div className="border border-border bg-card p-5">
             <h2 className="text-xl font-bold">Assignment Details</h2>
-            <div className="mt-5 space-y-4 text-sm">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">File Requirement</div>
-                <p className="mt-1 leading-6 text-foreground">{task.fileRequirement}</p>
-              </div>
+            <div className="mt-5 flex flex-wrap gap-x-10 gap-y-4 text-sm">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submissions</div>
                 <p className="mt-1 text-foreground">{task.submissions}</p>
@@ -386,7 +438,7 @@ export default function TaskDetailPage() {
 
         </div>
 
-        <aside className="space-y-5">
+        <aside className="space-y-4 xl:col-span-1">
           <div className="border border-border bg-card p-5">
             <h3 className="text-lg font-bold">Attached Brief</h3>
             <p className="mt-1 text-sm text-muted-foreground">Reference file shared with this assignment.</p>

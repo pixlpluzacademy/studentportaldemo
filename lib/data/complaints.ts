@@ -261,6 +261,8 @@ export async function fetchStudentAssignedMentors(
 
 export async function fetchComplaints(options?: {
   branchId?: string | null
+  /** When set, only return this student's complaints (My Complaints). */
+  studentId?: string | null
   supabase?: SupabaseClient
 }): Promise<DataResult<ComplaintListRow[]>> {
   const client = options?.supabase ?? createClient()
@@ -268,7 +270,9 @@ export async function fetchComplaints(options?: {
   try {
     let query = client.from('complaints').select(complaintSelect).order('created_at', { ascending: false })
 
-    if (options?.branchId) {
+    if (options?.studentId) {
+      query = query.eq('student_id', options.studentId)
+    } else if (options?.branchId) {
       query = query.eq('branch_id', options.branchId)
     }
 

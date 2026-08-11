@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import { fetchBatchById } from '@/lib/data/batches'
 import {
   fetchStudentIdByProfileId,
   fetchTaskById,
@@ -49,6 +50,7 @@ export default function TaskSubmitPage() {
   const { activeBranchId, loading: branchLoading } = useBranchScope()
 
   const [task, setTask] = useState<TaskListRow | null>(null)
+  const [assignedByRole, setAssignedByRole] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
@@ -89,6 +91,7 @@ export default function TaskSubmitPage() {
             name: batch.name,
             courseName: batch.course_name,
             enrolledCount: batch.enrolled_count,
+            batchCode: batch.batch_code,
           },
         ]),
       )
@@ -101,6 +104,19 @@ export default function TaskSubmitPage() {
 
       if (cancelled) return
 
+      let resolvedAssignedByRole: string | null = null
+
+      if (result.data) {
+        const batchDetail = await fetchBatchById(result.data.batchId)
+        if (cancelled) return
+        const assignerName = result.data.assignedBy.trim().toLowerCase()
+        const match = batchDetail.data?.staff_assignments.find(
+          (staff) => staff.staff_name.trim().toLowerCase() === assignerName,
+        )
+        resolvedAssignedByRole = match?.responsibility_title ?? null
+      }
+
+      setAssignedByRole(resolvedAssignedByRole)
       setTask(result.data)
       setError(result.error || (result.data ? null : 'Task not found or not in your scope.'))
       setLoading(false)
@@ -135,6 +151,11 @@ export default function TaskSubmitPage() {
 
     if (closed) {
       setNotice('Submission is closed for this task.')
+      return
+    }
+
+    if (task.fileRequired && !submissionFile && !task.studentSubmitted) {
+      setNotice('This task requires a file. Please attach a file before submitting.')
       return
     }
 
@@ -248,7 +269,7 @@ export default function TaskSubmitPage() {
             <span className="border border-border bg-background px-2 py-1 text-xs font-semibold">{getAssignmentTypeLabel(task.frequency)}</span>
           </div>
           <h1 className="mt-3 text-3xl font-bold tracking-tight">{task.title}</h1>
-          <p className="mt-2 max-w-3xl text-muted-foreground">{task.description}</p>
+          <p className="mt-2 whitespace-pre-wrap leading-relaxed text-muted-foreground">{task.description}</p>
         </div>
       </div>
 
@@ -259,48 +280,47 @@ export default function TaskSubmitPage() {
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Course</div>
-          <div className="mt-1 font-semibold">{task.course}</div>
+        <div className="border border-emerald-500/30 bg-emerald-500/10 p-5 xl:col-span-1">
+          <div className="text-xs text-emerald-700 dark:text-emerald-300">Assigned By</div>
+          <div className="mt-1 font-semibold">{task.assignedBy}</div>
+          {assignedByRole && (
+            <div className="mt-0.5 text-xs text-muted-foreground">{assignedByRole}</div>
+          )}
         </div>
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">Batch</div>
-          <div className="mt-1 font-semibold">{task.batch}</div>
-        </div>
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">
+
+        <div className="border border-purple-500/30 bg-purple-500/10 p-5 xl:col-span-1">
+          <div className="text-xs text-purple-700 dark:text-purple-300">
             {canResubmit ? 'Re-upload Deadline' : 'Submission Deadline'}
           </div>
           <div className="mt-1 font-semibold">
             {canResubmit ? task.resubmitDeadlineDisplay || task.dueDisplay : task.dueDisplay}
           </div>
           {canResubmit ? (
-            <div className="mt-2 text-xs text-[#153e90] dark:text-[#6ee75a]">
+            <div className="mt-2 text-xs text-purple-700 dark:text-purple-300">
               Teacher requested revision — upload before this deadline
             </div>
           ) : (
             task.dueTime && (
-              <div className="mt-2 text-xs text-[#153e90] dark:text-[#6ee75a]">Time scheduled for this task</div>
+              <div className="mt-2 text-xs text-purple-700 dark:text-purple-300">Time scheduled for this task</div>
             )
           )}
         </div>
-        <div className="border border-border bg-card p-5">
-          <div className="text-xs text-muted-foreground">File Requirement</div>
-          <div className="mt-1 font-semibold">{task.fileRequirement}</div>
+
+        <div className="border border-red-500/30 bg-red-500/10 p-5 md:col-span-2 xl:col-span-2">
+          <div className="text-xs text-red-700 dark:text-red-300">File Requirement</div>
+          <div className="mt-1 text-sm font-medium leading-relaxed text-foreground [overflow-wrap:anywhere]">
+            {task.fileRequirement}
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
-        <div className="space-y-5">
+      <div className="grid gap-4 xl:grid-cols-4 xl:items-start">
+        <div className="space-y-4 xl:col-span-3">
           <div className="border border-border bg-card p-5">
             <h2 className="text-xl font-bold">Assignment Details</h2>
-            <div className="mt-5 space-y-4 text-sm">
+            <div className="mt-5 flex flex-wrap gap-x-10 gap-y-4 text-sm">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Assigned By</div>
-                <p className="mt-1 text-foreground">{task.assignedBy}</p>
-              </div>
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submissions</div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submission Status</div>
                 <p className="mt-1 text-foreground">{task.submissions}</p>
               </div>
             </div>
@@ -396,7 +416,11 @@ export default function TaskSubmitPage() {
 
                 <div className="space-y-2">
                   <label className="text-sm font-semibold">
-                    {canResubmit ? 'Upload revised work file' : 'Upload work file (optional)'}
+                    {canResubmit
+                      ? 'Upload revised work file'
+                      : task.fileRequired
+                        ? 'Upload work file (required)'
+                        : 'Upload work file (optional)'}
                   </label>
                   <input
                     type="file"
@@ -418,7 +442,7 @@ export default function TaskSubmitPage() {
           </div>
         </div>
 
-        <aside className="space-y-5">
+        <aside className="space-y-4 xl:col-span-1">
           <div className="border border-border bg-card p-5">
             <h3 className="text-lg font-bold">Attached Brief</h3>
             <p className="mt-1 text-sm text-muted-foreground">Reference file shared with this assignment.</p>

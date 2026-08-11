@@ -54,14 +54,20 @@ function normalizeDueTime(value: string) {
   return trimmed.length === 5 ? `${trimmed}:00` : trimmed
 }
 
-async function callerCanManageBatchTasks(userId: string, batchId: string, action: 'create' | 'delete') {
+async function callerCanManageBatchTasks(
+  userId: string,
+  batchId: string,
+  action: 'create' | 'edit' | 'delete',
+) {
   if (await callerIsSuperAdmin(userId)) return true
 
   const canManage =
     action === 'create'
       ? (await callerHasPermission(userId, 'tasks.create')) ||
         (await callerHasPermission(userId, 'tasks.assign'))
-      : await callerHasPermission(userId, 'tasks.delete')
+      : action === 'edit'
+        ? await callerHasPermission(userId, 'tasks.edit')
+        : await callerHasPermission(userId, 'tasks.delete')
 
   if (!canManage) return false
 
@@ -106,6 +112,7 @@ export async function POST(request: Request) {
     const dueDate = String(formData.get('dueDate') || '').trim()
     const dueTimeRaw = String(formData.get('dueTime') || '').trim()
     const fileRequirement = String(formData.get('fileRequirement') || '').trim()
+    const fileRequired = String(formData.get('fileRequired') || '') === '1'
     const attachmentFile = formData.get('attachmentFile') as File | null
 
     if (!batchId || !title || !description || !dueDate) {
@@ -161,6 +168,7 @@ export async function POST(request: Request) {
         due_date: dueDate,
         due_time: normalizeDueTime(dueTimeRaw),
         file_requirement: fileRequirement || null,
+        file_required: fileRequired,
         attachment_path: attachmentPath,
         attachment_name: attachmentName,
         status: 'open',
@@ -179,6 +187,131 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, taskId: taskRow.id })
   } catch {
     return NextResponse.json({ error: 'Something went wrong while creating the task.' }, { status: 500 })
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const token = request.headers.get('authorization')?.replace('Bearer ', '')
+    const caller = await getCallerFromBearerToken(token)
+
+    if (!caller) {
+      return NextResponse.json({ error: 'Unauthorized. Please login again.' }, { status: 401 })
+    }
+
+    const formData = await request.formData()
+
+    const taskId = String(formData.get('taskId') || '').trim()
+    const batchId = String(formData.get('batchId') || '').trim()
+    const title = String(formData.get('title') || '').trim()
+    const description = String(formData.get('description') || '').trim()
+    const frequency = mapFrequencyToDb(String(formData.get('frequency') || 'One-time'))
+    const dueDate = String(formData.get('dueDate') || '').trim()
+    const dueTimeRaw = String(formData.get('dueTime') || '').trim()
+    const fileRequirement = String(formData.get('fileRequirement') || '').trim()
+    const fileRequired = String(formData.get('fileRequired') || '') === '1'
+    const removeAttachment = String(formData.get('removeAttachment') || '') === '1'
+    const attachmentFile = formData.get('attachmentFile') as File | null
+
+    if (!taskId || !batchId || !title || !description || !dueDate) {
+      return NextResponse.json(
+        { error: 'Title, description, batch, and submission date are required.' },
+        { status: 400 },
+      )
+    }
+
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from('tasks')
+      .select('id, batch_id, attachment_path')
+      .eq('id', taskId)
+      .maybeSingle()
+
+    if (existingError || !existing) {
+      return NextResponse.json({ error: 'Task not found.' }, { status: 404 })
+    }
+
+    const { data: batch, error: batchError } = await supabaseAdmin
+      .from('batches')
+      .select('id')
+      .eq('id', batchId)
+      .maybeSingle()
+
+    if (batchError || !batch) {
+      return NextResponse.json({ error: 'Selected batch not found.' }, { status: 400 })
+    }
+
+    const canEditExisting = await callerCanManageBatchTasks(caller.id, existing.batch_id, 'edit')
+    const canEditTarget =
+      batchId === existing.batch_id
+        ? canEditExisting
+        : await callerCanManageBatchTasks(caller.id, batchId, 'edit')
+
+    if (!canEditExisting || !canEditTarget) {
+      return NextResponse.json({ error: 'You do not have permission to edit this task.' }, { status: 403 })
+    }
+
+    let attachmentPath = existing.attachment_path as string | null
+    let attachmentName: string | null | undefined
+    let uploadedPath: string | null = null
+
+    if (attachmentFile && attachmentFile.size > 0) {
+      const sanitizedName = attachmentFile.name.replace(/[^\w.\-() ]+/g, '_')
+      uploadedPath = `briefs/${batchId}/${randomUUID()}/${sanitizedName}`
+
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from(TASK_FILES_BUCKET)
+        .upload(uploadedPath, attachmentFile, {
+          upsert: false,
+          contentType: attachmentFile.type || 'application/octet-stream',
+        })
+
+      if (uploadError) {
+        return NextResponse.json({ error: uploadError.message }, { status: 400 })
+      }
+
+      attachmentPath = uploadedPath
+      attachmentName = attachmentFile.name
+    } else if (removeAttachment) {
+      attachmentPath = null
+      attachmentName = null
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      batch_id: batchId,
+      title,
+      description,
+      frequency,
+      due_date: dueDate,
+      due_time: normalizeDueTime(dueTimeRaw),
+      file_requirement: fileRequirement || null,
+      file_required: fileRequired,
+    }
+
+    if (attachmentName !== undefined || uploadedPath || removeAttachment) {
+      updatePayload.attachment_path = attachmentPath
+      updatePayload.attachment_name = attachmentName ?? null
+    }
+
+    const { error: updateError } = await supabaseAdmin
+      .from('tasks')
+      .update(updatePayload)
+      .eq('id', taskId)
+
+    if (updateError) {
+      if (uploadedPath) {
+        await supabaseAdmin.storage.from(TASK_FILES_BUCKET).remove([uploadedPath])
+      }
+      return NextResponse.json({ error: updateError.message }, { status: 400 })
+    }
+
+    const previousPath = existing.attachment_path as string | null
+    if (previousPath && previousPath !== attachmentPath) {
+      await supabaseAdmin.storage.from(TASK_FILES_BUCKET).remove([previousPath])
+    }
+
+    return NextResponse.json({ success: true, taskId })
+  } catch {
+    return NextResponse.json({ error: 'Something went wrong while updating the task.' }, { status: 500 })
   }
 }
 

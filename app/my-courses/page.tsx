@@ -247,40 +247,44 @@ export default function Page() {
                       </div>
                     </div>
 
-                    <div className="mt-5">
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <span>Course Progress</span>
-                        <span>{course.progress}%</span>
-                      </div>
-                      <div className="mt-2 h-2 bg-muted">
-                        <div
-                          className="h-2 bg-[#153e90] dark:bg-[#6ee75a]"
-                          style={{ width: `${course.progress}%` }}
-                        />
-                      </div>
-                    </div>
+                    {!isStudent && (
+                      <>
+                        <div className="mt-5">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <span>Course Progress</span>
+                            <span>{course.progress}%</span>
+                          </div>
+                          <div className="mt-2 h-2 bg-muted">
+                            <div
+                              className="h-2 bg-[#153e90] dark:bg-[#6ee75a]"
+                              style={{ width: `${course.progress}%` }}
+                            />
+                          </div>
+                        </div>
 
-                    <div className="mt-4 grid gap-3 md:grid-cols-4">
-                      <div className="border border-border bg-card p-3">
-                        <div className="text-2xl font-bold">{course.studentsCount}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">Students</div>
-                      </div>
+                        <div className="mt-4 grid gap-3 md:grid-cols-4">
+                          <div className="border border-border bg-card p-3">
+                            <div className="text-2xl font-bold">{course.studentsCount}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">Students</div>
+                          </div>
 
-                      <div className="border border-border bg-card p-3">
-                        <div className="text-2xl font-bold">{course.tasksCount}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">Tasks</div>
-                      </div>
+                          <div className="border border-border bg-card p-3">
+                            <div className="text-2xl font-bold">{course.tasksCount}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">Tasks</div>
+                          </div>
 
-                      <div className="border border-border bg-card p-3">
-                        <div className="text-2xl font-bold">{course.submissionsCount}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">Submissions</div>
-                      </div>
+                          <div className="border border-border bg-card p-3">
+                            <div className="text-2xl font-bold">{course.submissionsCount}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">Submissions</div>
+                          </div>
 
-                      <div className="border border-border bg-card p-3">
-                        <div className="text-2xl font-bold">{course.seats}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">Batch Seats</div>
-                      </div>
-                    </div>
+                          <div className="border border-border bg-card p-3">
+                            <div className="text-2xl font-bold">{course.seats}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">Batch Seats</div>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))
               )}

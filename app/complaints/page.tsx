@@ -28,6 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { fetchStudentIdByProfileId } from '@/lib/data/tasks'
 import { createClient } from '@/lib/supabase/client'
 
 function getStatusClass(status: string) {
@@ -124,15 +125,50 @@ export default function Page() {
   const isStudent = isStudentMyCoursesView(parentRoleId)
   const isAdminView = isAdminComplaintView(parentRoleId) && can('complaints.view')
 
+  const [ownStudentId, setOwnStudentId] = useState<string | null>(null)
+  const [studentIdLoading, setStudentIdLoading] = useState(isStudent)
+
+  useEffect(() => {
+    if (!isStudent || !user?.id) {
+      setOwnStudentId(null)
+      setStudentIdLoading(false)
+      return
+    }
+
+    let cancelled = false
+
+    async function loadStudentId() {
+      setStudentIdLoading(true)
+      const studentId = await fetchStudentIdByProfileId(user!.id)
+      if (cancelled) return
+      setOwnStudentId(studentId)
+      setStudentIdLoading(false)
+    }
+
+    void loadStudentId()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isStudent, user?.id])
+
   const branchFilterId = isAdminView && activeBranchId ? activeBranchId : null
-  const { complaints, loading, error, reload } = useComplaints(branchFilterId)
+  const { complaints, loading, error, reload } = useComplaints({
+    branchId: branchFilterId,
+    studentId: isStudent ? ownStudentId : null,
+    requireStudentId: isStudent,
+  })
 
   const visibleComplaints = useMemo(() => {
     if (isAdminView) {
       return filterByBranch(complaints, (item) => item.branchId)
     }
-    return complaints
-  }, [complaints, filterByBranch, isAdminView])
+    if (isStudent) {
+      if (!ownStudentId) return []
+      return complaints.filter((complaint) => complaint.studentId === ownStudentId)
+    }
+    return []
+  }, [complaints, filterByBranch, isAdminView, isStudent, ownStudentId])
 
   const [assignedMentors, setAssignedMentors] = useState<StudentAssignedMentor[]>([])
   const [studentRatings, setStudentRatings] = useState<MentorRatingRow[]>([])

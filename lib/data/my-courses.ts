@@ -42,6 +42,12 @@ export type FetchMyCoursesOptions = {
   branchId: string
   userId: string
   parentRoleId: string | null
+  /**
+   * Force branch-wide access (all batches in the branch) regardless of role.
+   * Used for reviewers like Final QA who validate every submission in the branch.
+   * Never applies to students.
+   */
+  branchWide?: boolean
 }
 
 const courseTypeLabels: Record<CourseType, string> = {
@@ -176,6 +182,11 @@ export async function fetchAccessibleBatches(
       return { batches: [], error: batchResult.error }
     }
 
+    return { batches: batchResult.data }
+  }
+
+  // Reviewers with branch-wide scope (e.g. Final QA) see every batch in the branch.
+  if (options.branchWide) {
     return { batches: batchResult.data }
   }
 
@@ -332,7 +343,7 @@ export async function fetchMyCourseDetail(
       return { source: 'supabase', data: null, error: blueprintResult.error }
     }
 
-    const { batches, error: batchError } = await resolveAccessibleBatches(options, client)
+    const { batches, error: batchError } = await fetchAccessibleBatches(options, client)
 
     if (batchError) {
       return { source: 'supabase', data: null, error: batchError }

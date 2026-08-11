@@ -12,6 +12,7 @@ import {
   type TaskSubmissionListRow,
 } from '@/lib/data/task-submissions'
 import { fetchAccessibleBatches, isStudentMyCoursesView } from '@/lib/data/my-courses'
+import { fetchStudentIdByProfileId } from '@/lib/data/tasks'
 import { createClient } from '@/lib/supabase/client'
 
 async function getAccessToken() {
@@ -58,9 +59,30 @@ export default function Page() {
   const { activeBranchId, loading: branchLoading } = useBranchScope()
   const [batchLookup, setBatchLookup] = useState(new Map<string, { name: string; courseName: string; enrolledCount: number }>())
   const [batchesLoading, setBatchesLoading] = useState(true)
+  const [ownStudentId, setOwnStudentId] = useState<string | null>(null)
 
   const isStudent = isStudentMyCoursesView(parentRoleId)
-  const isMentor = parentRoleId === 'mentor'
+  // Final QA validates every submission in the branch, so it gets branch-wide scope.
+  const isFinalQa = can('final_qa.validate') || can('final_qa.approve')
+  const isMentor = parentRoleId === 'mentor' && !isFinalQa
+
+  useEffect(() => {
+    if (!isStudent || !user?.id) {
+      setOwnStudentId(null)
+      return
+    }
+
+    let cancelled = false
+
+    void (async () => {
+      const studentId = await fetchStudentIdByProfileId(user.id)
+      if (!cancelled) setOwnStudentId(studentId)
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isStudent, user?.id])
 
   useEffect(() => {
     if (branchLoading || !user?.id) {
@@ -84,6 +106,7 @@ export default function Page() {
         branchId: activeBranchId || '',
         userId: user!.id,
         parentRoleId,
+        branchWide: isFinalQa,
       })
 
       if (cancelled) return
@@ -108,16 +131,25 @@ export default function Page() {
     return () => {
       cancelled = true
     }
-  }, [activeBranchId, branchLoading, isStudent, parentRoleId, user?.id])
+  }, [activeBranchId, branchLoading, isStudent, isFinalQa, parentRoleId, user?.id])
 
-  const { submissions, loading, error } = useTaskSubmissions(batchLookup)
+  const { submissions, loading, error } = useTaskSubmissions(batchLookup, {
+    studentId: isStudent ? ownStudentId : null,
+    requireStudentId: isStudent,
+  })
   const [actionNotice, setActionNotice] = useState('')
   const [openingFileId, setOpeningFileId] = useState<string | null>(null)
 
   const visibleSubmissions = useMemo(() => {
+    // Students only ever see their own submissions.
+    if (isStudent) {
+      return ownStudentId
+        ? submissions.filter((submission) => submission.studentId === ownStudentId)
+        : []
+    }
     if (!batchLookup.size) return submissions
     return submissions.filter((submission) => !submission.batchId || batchLookup.has(submission.batchId))
-  }, [batchLookup, submissions])
+  }, [batchLookup, submissions, isStudent, ownStudentId])
 
   const handleViewFile = async (submission: TaskSubmissionListRow) => {
     setActionNotice('')
@@ -227,6 +259,11 @@ export default function Page() {
             {isMentor && (
               <span className="border border-[#153e90]/25 bg-[#153e90]/10 px-3 py-2 font-semibold text-[#153e90] dark:text-white">
                 Assigned batches only
+              </span>
+            )}
+            {isFinalQa && (
+              <span className="border border-[#153e90]/25 bg-[#153e90]/10 px-3 py-2 font-semibold text-[#153e90] dark:text-white">
+                All branch submissions
               </span>
             )}
           </div>

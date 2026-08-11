@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
+import Link from 'next/link'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/lib/auth/provider'
 import { useBranchScope } from '@/lib/data/hooks/use-branch-scope'
 import {
+  computeAttendancePercent,
   fetchAttendanceRecords,
   fetchStudentIdByProfile,
   fetchStudentsForBatches,
@@ -17,6 +19,7 @@ import {
   saveAttendanceMarks,
   type AttendanceBatch,
   type AttendanceMark,
+  type AttendanceScheduleInput,
   type AttendanceStudent,
   type DailyAttendanceRecord,
 } from '@/lib/data/attendance'
@@ -285,6 +288,26 @@ export default function Page() {
     return dailyAttendance.filter((item) => scopedBatchNames.includes(item.batch))
   }, [dailyAttendance, scopedBatchNames, isStudentView, currentStudent])
 
+  const batchScheduleById = useMemo(() => {
+    const map = new Map<string, AttendanceScheduleInput>()
+    for (const batch of scopedBatches) {
+      map.set(batch.id, {
+        startDate: batch.start_date || null,
+        endDate: batch.end_date || null,
+        classDayType: batch.class_day_type,
+        customDays: batch.custom_days || [],
+      })
+    }
+    return map
+  }, [scopedBatches])
+
+  // Weighted attendance % for one student (present=1, late=0.5, absent=0) over
+  // scheduled class days — same rule used on the dashboard, profile and placement.
+  const getStudentAttendancePercent = (student: AttendanceStudent) => {
+    const records = visibleAttendance.filter((item) => item.studentId === student.id)
+    return computeAttendancePercent(records, batchScheduleById.get(student.batchId) || null)
+  }
+
   const selectedViewBatch = useMemo(() => {
     return scopedBatches.find((batch) => batch.name === selectedViewBatchName) || null
   }, [scopedBatches, selectedViewBatchName])
@@ -328,10 +351,16 @@ export default function Page() {
       const absentToday = todayAttendance.filter((item) => item.status === 'absent').length
       const lateToday = todayAttendance.filter((item) => item.status === 'late').length
 
-      const presentTotal = batchAttendance.filter((item) => item.status === 'present').length
+      const schedule = batchScheduleById.get(batch.id) || null
+      const studentPercents = batchStudents.map((student) =>
+        computeAttendancePercent(
+          batchAttendance.filter((item) => item.studentId === student.id),
+          schedule,
+        ),
+      )
       const average =
-        batchAttendance.length > 0
-          ? Math.round((presentTotal / batchAttendance.length) * 100)
+        studentPercents.length > 0
+          ? Math.round(studentPercents.reduce((sum, value) => sum + value, 0) / studentPercents.length)
           : 0
 
       return {
@@ -343,7 +372,7 @@ export default function Page() {
         lateToday,
       }
     })
-  }, [scopedBatches, visibleStudents, visibleAttendance])
+  }, [scopedBatches, visibleStudents, visibleAttendance, batchScheduleById])
 
   const selectedBatchStudents = useMemo(() => {
     if (!selectedViewBatch) return []
@@ -356,7 +385,7 @@ export default function Page() {
     const present = records.filter((item) => item.status === 'present').length
     const absent = records.filter((item) => item.status === 'absent').length
     const late = records.filter((item) => item.status === 'late').length
-    const average = records.length > 0 ? Math.round((present / records.length) * 100) : 0
+    const average = computeAttendancePercent(records, batchScheduleById.get(student.batchId) || null)
 
     return {
       present,
@@ -370,8 +399,15 @@ export default function Page() {
   const totalPresent = visibleAttendance.filter((item) => item.status === 'present').length
   const totalAbsent = visibleAttendance.filter((item) => item.status === 'absent').length
   const totalLate = visibleAttendance.filter((item) => item.status === 'late').length
+  // Average of each visible student's weighted attendance % (present=1, late=0.5,
+  // absent=0 over scheduled days) so this matches the dashboard and profile.
   const overallAverage =
-    visibleAttendance.length > 0 ? Math.round((totalPresent / visibleAttendance.length) * 100) : 0
+    visibleStudents.length > 0
+      ? Math.round(
+          visibleStudents.reduce((sum, student) => sum + getStudentAttendancePercent(student), 0) /
+            visibleStudents.length,
+        )
+      : 0
 
   const handleViewBatch = (batchName: string) => {
     setSelectedViewBatchName(batchName)
@@ -929,13 +965,10 @@ export default function Page() {
                           <td className="px-4 py-4">{student.status}</td>
                           <td className="px-4 py-4">
                             <div className="flex justify-end">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleViewStudent(student.id)}
-                              >
-                                View Student Attendance
+                              <Button asChild variant="outline" size="sm">
+                                <Link href={`/students/${student.id}`}>
+                                  View Student Attendance
+                                </Link>
                               </Button>
                             </div>
                           </td>

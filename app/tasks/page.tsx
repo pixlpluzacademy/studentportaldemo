@@ -12,6 +12,7 @@ import {
   getAssignmentTypeLabel,
   getStudentTaskSubmitHref,
   isTaskSubmissionClosed,
+  updateTask,
   type TaskFrequency,
   type TaskListRow,
 } from '@/lib/data/tasks'
@@ -63,12 +64,18 @@ export default function Page() {
   const [batchesLoading, setBatchesLoading] = useState(true)
   const [notice, setNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  const [existingAttachmentName, setExistingAttachmentName] = useState('')
+  const [removeAttachment, setRemoveAttachment] = useState(false)
   const attachmentRef = useRef<HTMLInputElement | null>(null)
+  const formRef = useRef<HTMLDivElement | null>(null)
 
   const isStudent = isStudentMyCoursesView(parentRoleId)
   const isMentor = parentRoleId === 'mentor'
 
   const canCreateTask = !isStudent && (can('tasks.create') || can('tasks.assign'))
+  const canEditTask = !isStudent && can('tasks.edit')
+  const isEditing = editingTaskId !== null
 
   const [form, setForm] = useState({
     title: '',
@@ -79,6 +86,7 @@ export default function Page() {
     useScheduledTime: false,
     dueTime: '',
     fileRequirement: '',
+    fileRequired: false,
     attachmentFile: null as File | null,
     attachmentName: '',
   })
@@ -166,6 +174,106 @@ export default function Page() {
     (task) => isTaskSubmissionClosed(task.due, task.dueTime) || task.status === 'Closed',
   ).length
 
+  const resetForm = () => {
+    setForm({
+      title: '',
+      description: '',
+      batchId: allowedBatches[0]?.id || '',
+      frequency: 'Daily',
+      due: today,
+      useScheduledTime: false,
+      dueTime: '',
+      fileRequirement: '',
+      fileRequired: false,
+      attachmentFile: null,
+      attachmentName: '',
+    })
+    setEditingTaskId(null)
+    setExistingAttachmentName('')
+    setRemoveAttachment(false)
+
+    if (attachmentRef.current) {
+      attachmentRef.current.value = ''
+    }
+  }
+
+  const handleEditTask = (task: TaskListRow) => {
+    setEditingTaskId(task.id)
+    setExistingAttachmentName(task.attachmentName || '')
+    setRemoveAttachment(false)
+    setForm({
+      title: task.title,
+      description: task.description,
+      batchId: task.batchId,
+      frequency: task.frequency,
+      due: task.due,
+      useScheduledTime: Boolean(task.dueTime),
+      dueTime: task.dueTime || '',
+      fileRequirement: task.fileRequirement,
+      fileRequired: task.fileRequired,
+      attachmentFile: null,
+      attachmentName: '',
+    })
+
+    if (attachmentRef.current) {
+      attachmentRef.current.value = ''
+    }
+
+    setNotice('')
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const handleUpdateTask = async () => {
+    if (!editingTaskId) return
+
+    if (!form.title.trim() || !form.description.trim() || !form.batchId || !form.due) {
+      setNotice('Please add title, description, batch and submission date.')
+      return
+    }
+
+    const accessToken = await getAccessToken()
+
+    if (!accessToken) {
+      setNotice('Session expired. Please login again.')
+      return
+    }
+
+    setSubmitting(true)
+    setNotice('')
+
+    const payload = new FormData()
+    payload.append('taskId', editingTaskId)
+    payload.append('batchId', form.batchId)
+    payload.append('title', form.title.trim())
+    payload.append('description', form.description.trim())
+    payload.append('frequency', form.frequency)
+    payload.append('dueDate', form.due)
+    payload.append('fileRequirement', form.fileRequirement.trim())
+    payload.append('fileRequired', form.fileRequired ? '1' : '0')
+
+    if (form.useScheduledTime && form.dueTime) {
+      payload.append('dueTime', form.dueTime)
+    }
+
+    if (form.attachmentFile) {
+      payload.append('attachmentFile', form.attachmentFile)
+    } else if (removeAttachment) {
+      payload.append('removeAttachment', '1')
+    }
+
+    const result = await updateTask(payload, accessToken)
+    setSubmitting(false)
+
+    if (!result.ok) {
+      setNotice(result.error || 'Failed to update task.')
+      return
+    }
+
+    await reload()
+    setNotice('Task updated.')
+    resetForm()
+  }
+
   const handleCreateTask = async () => {
     if (!form.title.trim() || !form.description.trim() || !form.batchId || !form.due) {
       setNotice('Please add title, description, batch and submission date.')
@@ -189,6 +297,7 @@ export default function Page() {
     payload.append('frequency', form.frequency)
     payload.append('dueDate', form.due)
     payload.append('fileRequirement', form.fileRequirement.trim())
+    payload.append('fileRequired', form.fileRequired ? '1' : '0')
 
     if (form.useScheduledTime && form.dueTime) {
       payload.append('dueTime', form.dueTime)
@@ -208,22 +317,7 @@ export default function Page() {
 
     await reload()
     setNotice('Task created and assigned to the selected batch.')
-    setForm({
-      title: '',
-      description: '',
-      batchId: allowedBatches[0]?.id || '',
-      frequency: 'Daily',
-      due: today,
-      useScheduledTime: false,
-      dueTime: '',
-      fileRequirement: '',
-      attachmentFile: null,
-      attachmentName: '',
-    })
-
-    if (attachmentRef.current) {
-      attachmentRef.current.value = ''
-    }
+    resetForm()
   }
 
   const handleDelete = async (task: TaskListRow) => {
@@ -303,15 +397,28 @@ export default function Page() {
       </div>
 
       <div className="space-y-5">
-          {canCreateTask && (
-            <div className="border border-border bg-card p-5">
+          {(canCreateTask || canEditTask) && (
+            <div ref={formRef} className="border border-border bg-card p-5">
               <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
                 <div>
-                  <h2 className="text-xl font-bold">Create Batch Assignment</h2>
+                  <h2 className="text-xl font-bold">
+                    {isEditing ? 'Edit Batch Assignment' : 'Create Batch Assignment'}
+                  </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Assign a task to one batch. Only students in that batch will see it.
+                    {isEditing
+                      ? 'Update this task. Changes apply to the students in the selected batch.'
+                      : 'Assign a task to one batch. Only students in that batch will see it.'}
                   </p>
                 </div>
+                {isEditing && (
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
+                  >
+                    Cancel edit
+                  </button>
+                )}
               </div>
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -413,6 +520,18 @@ export default function Page() {
                     placeholder="Example: Upload JPG and source file"
                     className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                   />
+                  <label className="flex items-center gap-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={form.fileRequired}
+                      onChange={(event) => setForm((prev) => ({ ...prev, fileRequired: event.target.checked }))}
+                      className="h-4 w-4 border border-border"
+                    />
+                    File required to submit
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    When ticked, students must attach a file to submit. Leave unticked to allow submitting without a file.
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -427,9 +546,33 @@ export default function Page() {
                         attachmentFile: file,
                         attachmentName: file?.name || '',
                       }))
+                      if (file) setRemoveAttachment(false)
                     }}
                     className="h-11 w-full border border-border bg-background px-4 py-2 text-sm outline-none file:mr-3 file:border-0 file:bg-[#153e90] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-white"
                   />
+                  {isEditing && existingAttachmentName && !form.attachmentFile && (
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span className="truncate">
+                        {removeAttachment ? (
+                          <span className="text-red-600 dark:text-red-300">Current file will be removed</span>
+                        ) : (
+                          <>Current file: <span className="font-semibold text-foreground">{existingAttachmentName}</span></>
+                        )}
+                      </span>
+                      <label className="flex shrink-0 items-center gap-1.5 font-semibold">
+                        <input
+                          type="checkbox"
+                          checked={removeAttachment}
+                          onChange={(event) => setRemoveAttachment(event.target.checked)}
+                          className="h-3.5 w-3.5 border border-border"
+                        />
+                        Remove file
+                      </label>
+                    </div>
+                  )}
+                  {isEditing && !existingAttachmentName && !form.attachmentFile && (
+                    <p className="text-xs text-muted-foreground">No brief file attached. Upload one to add it.</p>
+                  )}
                 </div>
               </div>
 
@@ -440,14 +583,35 @@ export default function Page() {
                     {selectedFormBatch?.course_name || 'Select batch'}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleCreateTask()}
-                  disabled={submitting || batchesLoading || allowedBatches.length === 0}
-                  className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
-                >
-                  {submitting ? 'Creating…' : 'Create Task'}
-                </button>
+                {isEditing ? (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={resetForm}
+                      disabled={submitting}
+                      className="border border-border px-5 py-2.5 text-sm font-semibold hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleUpdateTask()}
+                      disabled={submitting || batchesLoading || allowedBatches.length === 0 || !canEditTask}
+                      className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
+                    >
+                      {submitting ? 'Updating…' : 'Update Task'}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateTask()}
+                    disabled={submitting || batchesLoading || allowedBatches.length === 0 || !canCreateTask}
+                    className="bg-[#153e90] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#153e90]/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-[#6ee75a] dark:text-black dark:hover:bg-[#6ee75a]/90"
+                  >
+                    {submitting ? 'Creating…' : 'Create Task'}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -562,6 +726,16 @@ export default function Page() {
                                     Submit
                                   </Link>
                                 )
+                              )}
+
+                              {canEditTask && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditTask(task)}
+                                  className="border border-border px-3 py-2 text-xs font-semibold hover:bg-accent"
+                                >
+                                  Edit
+                                </button>
                               )}
 
                               {can('tasks.delete') && !isStudent && (

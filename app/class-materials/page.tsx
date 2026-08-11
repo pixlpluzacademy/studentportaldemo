@@ -456,7 +456,7 @@ export default function Page() {
                     <input
                       value={form.classLink}
                       onChange={(event) => setForm((prev) => ({ ...prev, classLink: event.target.value }))}
-                      placeholder="Google Meet, Zoom, YouTube or recorded class link"
+                      placeholder="YouTube class link or recorded class link"
                       className="h-11 w-full border border-border bg-background px-4 text-sm outline-none focus:border-[#153e90] dark:focus:border-[#6ee75a]"
                     />
                   </div>
